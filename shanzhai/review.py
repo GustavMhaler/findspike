@@ -80,12 +80,11 @@ def _parse_llm_json(text: str) -> dict:
 def pending_signals(state_dir: Path, now: datetime, history: list[dict]) -> list[dict]:
     reviewed_keys = {entry["key"] for entry in read_json(state_dir / "reviews.json", [])}
     cutoff = now - REVIEW_WINDOW  # mature: at least 24h old
-    fresh_cutoff = now - REVIEW_WINDOW * 2  # stale: older than 48h is never reviewed
     pending = [
         item for item in history
         if item.get("layer") in REVIEWED_LAYERS
         and item["key"] not in reviewed_keys
-        and fresh_cutoff <= datetime.fromisoformat(item["signal_time"]) <= cutoff
+        and datetime.fromisoformat(item["signal_time"]) <= cutoff
     ]
     pending.sort(key=lambda item: item["signal_time"])
     return pending[:MAX_PER_BATCH]

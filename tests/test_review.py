@@ -61,10 +61,12 @@ class TestPendingSignals:
         assert len(pending) == 1
         assert pending[0]["layer"] == "swing"
 
-    def test_stale_signals_older_than_48h_excluded(self, tmp_path):
+    def test_old_matured_signals_still_reviewed(self, tmp_path):
+        """No freshness cutoff: a 100h-old matured signal is still pending
+        (its 24h window is measured from Binance at review time)."""
         seed_history(tmp_path, [matured_signal(hours_ago=100)])
         history = json.loads((tmp_path / "choch_history.json").read_text())
-        assert pending_signals(tmp_path, NOW, history) == []
+        assert len(pending_signals(tmp_path, NOW, history)) == 1
 
     def test_not_yet_matured_excluded(self, tmp_path):
         seed_history(tmp_path, [matured_signal(hours_ago=10)])
