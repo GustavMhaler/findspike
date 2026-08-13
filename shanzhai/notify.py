@@ -37,11 +37,15 @@ def request_delivery(
 # structures (structure-time drift) must never reach subscribers' inboxes.
 DIGEST_MAX_AGE = timedelta(hours=26)
 
+# Subscribers opted out of bearish signals; digests are bullish-only.
+DIGEST_DIRECTIONS = ("bullish",)
+
 
 def build_digest_payload(signals: list[dict], scan_at: datetime) -> dict:
     fresh = [
         s for s in signals
-        if scan_at - datetime.fromisoformat(s["signal_time"]) <= DIGEST_MAX_AGE
+        if s.get("direction") in DIGEST_DIRECTIONS
+        and scan_at - datetime.fromisoformat(s["signal_time"]) <= DIGEST_MAX_AGE
     ]
     return {
         "kind": "digest",

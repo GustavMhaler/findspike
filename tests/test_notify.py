@@ -28,5 +28,12 @@ class TestDigestPayload:
         payload = build_digest_payload([stale_10d, stale_27h, fresh], NOW)
         assert [s["symbol"] for s in payload["signals"]] == ["AAAUSDT"]
 
+    def test_bearish_excluded(self):
+        bearish = _signal("BBBUSDT:swing:BOS:5", (NOW - timedelta(hours=2)).isoformat(), "BBBUSDT")
+        bearish["direction"] = "bearish"
+        bullish = _signal("AAAUSDT:swing:BOS:6", (NOW - timedelta(hours=1)).isoformat())
+        payload = build_digest_payload([bearish, bullish], NOW)
+        assert [s["symbol"] for s in payload["signals"]] == ["AAAUSDT"]
+
     def test_constant_matches_gate(self):
         assert DIGEST_MAX_AGE >= timedelta(hours=24)
