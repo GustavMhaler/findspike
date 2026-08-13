@@ -51,6 +51,16 @@ class TestPendingSignals:
         history = json.loads((tmp_path / "choch_history.json").read_text())
         assert len(pending_signals(tmp_path, NOW, history)) == 10
 
+    def test_internal_layer_excluded(self, tmp_path):
+        internal = matured_signal(hours_ago=30)
+        internal["layer"] = "internal"
+        internal["key"] = "AAAUSDT:internal:BOS:1234567890"
+        seed_history(tmp_path, [matured_signal(hours_ago=30), internal])
+        history = json.loads((tmp_path / "choch_history.json").read_text())
+        pending = pending_signals(tmp_path, NOW, history)
+        assert len(pending) == 1
+        assert pending[0]["layer"] == "swing"
+
 
 class TestMeasure:
     def test_computes_window_stats(self):

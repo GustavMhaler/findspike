@@ -24,6 +24,8 @@ from .io_utils import read_json, write_json
 
 REVIEW_WINDOW = timedelta(hours=24)
 MAX_PER_BATCH = 10
+# Reviews cover swing-layer signals only (same as page/email).
+REVIEWED_LAYERS = ("swing",)
 
 ENV_BASE_URL = "AI_BASE_URL"
 ENV_API_KEY = "AI_API_KEY"
@@ -50,12 +52,15 @@ def call_llm(config: dict, prompt: str, timeout: float = 40) -> str:
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.2,
-        "response_format": {"type": "json_object"},
     }
     req = urllib.request.Request(
         f"{config['base_url']}/chat/completions",
         data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {config['api_key']}"},
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {config['api_key']}",
+            "User-Agent": "shanzhai-signal-desk/0.1",
+        },
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=timeout) as response:
@@ -77,7 +82,8 @@ def pending_signals(state_dir: Path, now: datetime, history: list[dict]) -> list
     cutoff = now - REVIEW_WINDOW
     pending = [
         item for item in history
-        if item["key"] not in reviewed_keys
+        if item.get("layer") in REVIEWED_LAYERS
+        and item["key"] not in reviewed_keys
         and datetime.fromisoformat(item["signal_time"]) <= cutoff
     ]
     pending.sort(key=lambda item: item["signal_time"])
@@ -117,8 +123,8 @@ def build_prompt(pending: list[dict]) -> str:
     for item in pending:
         lines.append(
             f"- key={item['key']} {item['symbol']} {item['direction']} {item['tag']} "
-            f"信号收盘价={item['close']} 24h涨跌幅={item.get('review_change_pct')}% "
-            f"24h最高={item.get('review_high_pct')}% 24h最低={item.get('review_low_pct')}%"
+            f"信号收盘价={item['close']} 24h涨跌幅={item.get('change_pct')}% "
+            f"24h最高={item.get('high_pct')}% 24h最低={item.get('low_pct')}%"
         )
     return "\n".join(lines)
 
