@@ -19,15 +19,15 @@ class BinancePublicClient:
         if params:
             url += "?" + urllib.parse.urlencode(params)
         last_error: Exception | None = None
-        for attempt in range(3):
+        for attempt in range(5):
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "shanzhai-signal-desk/0.1"})
                 with urllib.request.urlopen(req, timeout=self.timeout) as response:
                     return json.load(response)
             except Exception as exc:  # network boundary; re-raised after bounded retry
                 last_error = exc
-                if attempt < 2:
-                    time.sleep(2**attempt)
+                if attempt < 4:
+                    time.sleep(min(2**attempt, 8))
         raise RuntimeError(f"Binance request failed: {path}") from last_error
 
     def usdt_symbols(self) -> list[str]:

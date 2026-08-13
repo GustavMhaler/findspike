@@ -61,7 +61,7 @@ class TestBinanceClient:
         ):
             with pytest.raises(RuntimeError, match="Binance request failed"):
                 BinancePublicClient(timeout=1).candles("BTCUSDT", "1d", 1)
-        assert sleep.call_count == 2
+        assert sleep.call_count == 4
 
     def test_succeeds_after_retry(self):
         failing = mock.Mock(side_effect=ConnectionError("boom"))
