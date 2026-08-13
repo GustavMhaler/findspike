@@ -93,6 +93,10 @@ def scan_choch(client: BinancePublicClient, state_dir: Path, now: datetime, seed
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         jobs = {executor.submit(scan, item): item["symbol"] for item in active}
+        # (symbol, layer, tag, signal_time) identifies one event; structure_time
+        # drifts by a candle or two as candles accumulate, so compare without it
+        # to swallow re-derived duplicates instead of re-emitting them.
+        seen_events = {(h["symbol"], h["layer"], h["tag"], h["signal_time"]) for h in history}
         through = None
         for job in as_completed(jobs):
             try:
@@ -101,6 +105,11 @@ def scan_choch(client: BinancePublicClient, state_dir: Path, now: datetime, seed
                     through = max(through, candles[-1].close_time) if through else candles[-1].close_time
                 for signal in events:
                     if signal["key"] not in sent:
+                        event_sig = (signal["symbol"], signal["layer"], signal["tag"], signal["signal_time"])
+                        if event_sig in seen_events:
+                            sent.add(signal["key"])
+                            continue
+                        seen_events.add(event_sig)
                         signal["notify"] = not seed and now - datetime.fromisoformat(signal["signal_time"]) <= timedelta(hours=24)
                         signals.append(signal)
                         sent.add(signal["key"])

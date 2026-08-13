@@ -101,6 +101,25 @@ class TestScanCoach:
         assert result["watch_count"] == 0
         assert result["signals"] == []
 
+    def test_rederived_duplicate_absorbed_not_reemitted(self, now, state_dir):
+        """A structure re-derived with a drifted structure_time (new key but
+        same symbol/layer/tag/signal_time) must not be emitted again."""
+        self._seed_daily(state_dir, now)
+        client = FakeClient(now, breakouts={"AAAUSDT"})
+        first = scan_choch(client, state_dir, now)
+        real_key = first["signals"][0]["key"]
+        event = first["signals"][0]
+        (state_dir / "choch_keys.json").write_text(json.dumps(["AAAUSDT:swing:BOS:9999999999"]))
+        (state_dir / "choch_history.json").write_text(
+            json.dumps([{**event, "structure_time": "2026-08-01T00:00:00+00:00", "key": "AAAUSDT:swing:BOS:9999999999"}])
+        )
+        second = scan_choch(client, state_dir, now)
+        assert second["new_signal_count"] == 0
+        keys = json.loads((state_dir / "choch_keys.json").read_text())
+        assert real_key in keys
+        history = json.loads((state_dir / "choch_history.json").read_text())
+        assert len(history) == 1
+
 
 class TestComposeLatest:
     def test_contract(self, now, state_dir):

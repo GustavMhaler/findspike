@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 def request_delivery(
@@ -33,7 +33,16 @@ def request_delivery(
         return {"sent": False, "error": type(exc).__name__}
 
 
+# Only signals triggered recently may be emailed; re-derived copies of old
+# structures (structure-time drift) must never reach subscribers' inboxes.
+DIGEST_MAX_AGE = timedelta(hours=26)
+
+
 def build_digest_payload(signals: list[dict], scan_at: datetime) -> dict:
+    fresh = [
+        s for s in signals
+        if scan_at - datetime.fromisoformat(s["signal_time"]) <= DIGEST_MAX_AGE
+    ]
     return {
         "kind": "digest",
         "scan_at": scan_at.isoformat(),
@@ -44,7 +53,7 @@ def build_digest_payload(signals: list[dict], scan_at: datetime) -> dict:
                 "signal_time": s["signal_time"], "tag": s["tag"],
                 "direction": s["direction"], "layer": s["layer"],
             }
-            for s in signals
+            for s in fresh
         ],
     }
 
