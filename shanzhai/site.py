@@ -75,7 +75,8 @@ a:hover { color: var(--primary-active); }
 }
 .banner.visible { display: block; }
 
-.grid { display: grid; grid-template-columns: 8fr 4fr; gap: 24px; margin: 24px 0; align-items: start; }
+.cols { display: grid; grid-template-columns: 8fr 4fr; gap: 24px; margin: 24px 0; align-items: start; }
+.col { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
 .card {
   background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px;
   padding: 24px; overflow: hidden;
@@ -105,6 +106,8 @@ td.up { color: var(--up); }
 td.down { color: var(--down); }
 .symbol { font-weight: 600; color: #fff; }
 .scroll { overflow-x: auto; margin: 0 -24px; padding: 0 24px; }
+.scroll-v { max-height: 600px; overflow-y: auto; }
+.scroll-v thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
 .empty { padding: 24px 0; color: var(--muted); font-size: 13px; }
 
 .signal { padding: 16px 0; border-bottom: 1px solid var(--hairline); }
@@ -185,10 +188,10 @@ td.down { color: var(--down); }
 .footer .fine { margin-top: 32px; font-size: 12px; color: #707a8a; border-top: 1px solid #eaecef; padding-top: 16px; }
 
 @media (max-width: 1024px) {
-  .grid { grid-template-columns: 1fr 1fr; }
+  .cols { grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 767px) {
-  .grid { grid-template-columns: 1fr; }
+  .cols { grid-template-columns: 1fr; }
   .container { padding: 0 16px; }
   .card { padding: 16px; }
   .scroll { margin: 0 -16px; padding: 0 16px; }
@@ -258,7 +261,7 @@ def _spike_rows(spikes: list[dict]) -> str:
             "</tr>"
         )
     return (
-        "<div class='scroll'><table><thead><tr>"
+        "<div class='scroll scroll-v'><table><thead><tr>"
         "<th scope='col'>#</th>"
         "<th scope='col' data-sort='symbol' data-type='s'><button type='button'>Symbol</button></th>"
         "<th scope='col' data-sort='date' data-type='s'><button type='button'>Spike Date</button></th>"
@@ -365,7 +368,7 @@ def _history_rows(history: list[dict]) -> str:
             "</tr>"
         )
     return (
-        "<div class='scroll'><table><thead><tr>"
+        "<div class='scroll scroll-v'><table><thead><tr>"
         "<th scope='col' data-sort='time' data-type='s' class='sort-active sort-desc' aria-sort='descending'><button type='button'>Signal Time</button></th>"
         "<th scope='col' data-sort='symbol' data-type='s'><button type='button'>Symbol</button></th>"
         "<th scope='col' data-sort='tag' data-type='s'><button type='button'>Tag</button></th>"
@@ -490,32 +493,36 @@ def _page_html(latest: dict, site_key: str) -> str:
 <div class="container">
   <div class="banner" id="stale-banner" role="alert"></div>
 
-  <main class="grid">
-    <section class="card">
-      <h2>Volume spikes</h2>
-      <p class="sub">Newest closed daily candle within the last 10, base volume at least 5x its preceding 7-candle average.</p>
-      {_spike_rows(spikes)}
-    </section>
+  <main class="cols">
+    <div class="col">
+      <section class="card">
+        <h2>Volume spikes</h2>
+        <p class="sub">Newest closed daily candle within the last 10, base volume at least 5x its preceding 7-candle average.</p>
+        {_spike_rows(spikes)}
+      </section>
 
-    <section class="card">
-      <h2>CHoCH breakouts</h2>
-      <p class="sub">Close crossing a confirmed structure level. Last scan {_fmt_dt(choch.get('latest_scan_at') or generated)}.</p>
-      {_signal_cards(signals)}
-    </section>
+      <section class="card">
+        <h2>CHoCH history</h2>
+        <p class="sub">Confirmed breakouts from the last 30 days.</p>
+        {_history_rows(history)}
+      </section>
+    </div>
 
-    <section class="card">
-      <h2>CHoCH history</h2>
-      <p class="sub">Confirmed breakouts from the last 30 days.</p>
-      {_history_rows(history)}
-    </section>
+    <div class="col">
+      <section class="card">
+        <h2>CHoCH breakouts</h2>
+        <p class="sub">Close crossing a confirmed structure level. Last scan {_fmt_dt(choch.get('latest_scan_at') or generated)}.</p>
+        {_signal_cards(signals)}
+      </section>
 
-    {_reviews_card(latest.get("reviews", {}))}
+      {_reviews_card(latest.get("reviews", {}))}
 
-    <section class="card subscribe">
-      <h2>Email notifications</h2>
-      <p class="sub">Get one digest when a new CHoCH signal is confirmed.</p>
-      {subscribe_block}
-    </section>
+      <section class="card subscribe">
+        <h2>Email notifications</h2>
+        <p class="sub">Get one digest when a new CHoCH signal is confirmed.</p>
+        {subscribe_block}
+      </section>
+    </div>
   </main>
 </div>
 
