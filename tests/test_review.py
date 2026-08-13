@@ -61,6 +61,16 @@ class TestPendingSignals:
         assert len(pending) == 1
         assert pending[0]["layer"] == "swing"
 
+    def test_stale_signals_older_than_48h_excluded(self, tmp_path):
+        seed_history(tmp_path, [matured_signal(hours_ago=100)])
+        history = json.loads((tmp_path / "choch_history.json").read_text())
+        assert pending_signals(tmp_path, NOW, history) == []
+
+    def test_not_yet_matured_excluded(self, tmp_path):
+        seed_history(tmp_path, [matured_signal(hours_ago=10)])
+        history = json.loads((tmp_path / "choch_history.json").read_text())
+        assert pending_signals(tmp_path, NOW, history) == []
+
 
 class TestMeasure:
     def test_computes_window_stats(self):
