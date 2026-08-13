@@ -1,15 +1,10 @@
 [Unit]
-Description=Run Shanzhai CHoCH scan 5 minutes after each 4h candle close
+Description=Run Shanzhai CHoCH scan 5 minutes after each 1h candle close
 
 [Timer]
-OnCalendar=*-*-* 00:05:00 Asia/Shanghai
-OnCalendar=*-*-* 04:05:00 Asia/Shanghai
-OnCalendar=*-*-* 08:05:00 Asia/Shanghai
-OnCalendar=*-*-* 12:05:00 Asia/Shanghai
-OnCalendar=*-*-* 16:05:00 Asia/Shanghai
-OnCalendar=*-*-* 20:05:00 Asia/Shanghai
+OnCalendar=*-*-* *:05:00 Asia/Shanghai
 Persistent=true
-RandomizedDelaySec=60
+RandomizedDelaySec=30
 
 [Install]
 WantedBy=timers.target

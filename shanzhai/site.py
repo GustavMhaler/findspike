@@ -410,7 +410,7 @@ def _page_html(latest: dict, site_key: str) -> str:
     <div class="footer-grid">
       <div>
         <h3>Shanzhai Signal Desk</h3>
-        <p style="margin:0;font-size:13px">Volume-spike universe and 4-hour BOS/CHoCH breakouts from public Binance market data.</p>
+        <p style="margin:0;font-size:13px">Volume-spike universe and 1-hour BOS/CHoCH breakouts from public Binance market data.</p>
       </div>
       <div>
         <h3>Data</h3>
@@ -427,7 +427,7 @@ def _page_html(latest: dict, site_key: str) -> str:
       </div>
     </div>
     <p class="fine">All data is generated deterministically from closed Binance candles. Signals can be delayed by design:
-       a pivot is confirmed only after three further 4h candles close. Past performance does not guarantee future results.
+       a structure is confirmed only by the candles that follow it. Past performance does not guarantee future results.
        This project is not investment advice.</p>
   </div>
 </footer>
@@ -456,7 +456,7 @@ def _page_html(latest: dict, site_key: str) -> str:
       banners.push("The page is stale: the last successful site build was more than 26 hours ago.");
     }}
     if (now - through.getTime() > 5 * 3600 * 1000) {{
-      banners.push("Market data is stale: the last fully closed 4h candle is older than 5 hours.");
+      banners.push("Market data is stale: the last fully closed 1h candle is older than 2 hours.");
     }}
     var dot = document.getElementById("status-dot");
     var label = document.getElementById("status-label");

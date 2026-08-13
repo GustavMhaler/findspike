@@ -1,6 +1,6 @@
-# Shanzhai Coach scan — 5 minutes after every 4h candle closes (00/04/08/12/16/20)
+# Shanzhai CHoCH scan — 5 minutes after every 1h candle closes
 [Unit]
-Description=Shanzhai CHoCH 4h BOS/CHoCH scan, site build and digest delivery
+Description=Shanzhai CHoCH 1h BOS/CHoCH scan, site build and digest delivery
 After=network-online.target
 Wants=network-online.target
 

@@ -4,7 +4,7 @@
 
 - `shanzhai-daily.timer`: 06:00 Asia/Shanghai, refresh volume universe and site.
 - `shanzhai-choch.timer`: 00:05, 04:05, 08:05, 12:05, 16:05 and 20:05,
-  evaluate newly closed 4h candles, rebuild, then request a digest delivery.
+  evaluate newly closed 1h candles, rebuild, then request a digest delivery.
 - A failed build leaves `public/` untouched. The status sidecar records the
   failure for the next successful build and administrator alerting.
 
@@ -19,7 +19,7 @@ python3 -m shanzhai.cli check --output public   # exit 1 when the site or market
 
 Freshness monitoring: run `check` from cron/systemd on another host or locally
 hourly; it exits 1 when the published site is older than 26h or the last
-closed 4h candle is older than 5h.
+closed 1h candle is older than 2h.
 
 ## Production checklist
 
@@ -45,7 +45,7 @@ specific unavailable message. Do not delete D1 during rollback.
 ## Incident rules
 
 - Coverage below 90%, no fresh daily build by 07:00, or no CHoCH scan within
-  4h30m is an incident.
+  1h30m is an incident.
 - Data failure: retain last-known-good, retry three times with backoff, alert the
   administrator after consecutive failure.
 - Resend failure: retain and publish signal, retry notification separately.

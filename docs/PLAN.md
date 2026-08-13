@@ -7,7 +7,7 @@ Cloudflare/Resend credentials and privileged host configuration.
 
 Publish a static, mobile-friendly market dashboard at
 `https://shanzhai.shaojiang61.site`. At 06:00 Asia/Shanghai it refreshes the
-daily volume-spike universe. Five minutes after every closed Binance 4-hour
+daily volume-spike universe. Five minutes after every closed Binance 1-hour
 candle it evaluates CHoCH breakouts, republishes the site, and sends one digest
 only when new signals exist.
 
@@ -21,7 +21,7 @@ multi-page PDF are not a safe application data contract.
   whose base volume exceeds its preceding 7-candle average by 5x. Rank by the
   ratio and also display USDT quote volume.
 - Watch pool: a qualifying pair remains eligible for CHoCH for 10 days.
-- CHoCH: closed Binance 4h candles only; LuxAlgo SMC port — swing structure
+- CHoCH: closed Binance 1h candles only; LuxAlgo SMC port — swing structure
   (size 50) and internal structure (size 5) levels are right-confirmed by the
   candles that follow a swing bar (non-repainting); a level updates only on a
   leg flip; a signal fires once per level when close crosses it, tagged BOS
@@ -97,7 +97,7 @@ signal labels, 44px targets and reduced-motion support are mandatory.
 4. Operations: systemd oneshot/timers, atomic deployment, bounded logs,
    Nginx/Tunnel routing and administrator failure notification.
 5. Production: DNS/Tunnel/Nginx/Worker/D1/Resend configured; run a synthetic
-   subscription and unsubscribe; verify one full 4h scan and next 06:00 scan.
+   subscription and unsubscribe; verify one full 1h scan and next 06:00 scan.
 
 ## 7. Risks and optimizations
 
@@ -107,7 +107,7 @@ signal labels, 44px targets and reduced-motion support are mandatory.
 - Scanning every pair serially is slow. Use conservative bounded concurrency
   while respecting Binance weights; cache unchanged daily data between CHoCH
   scans.
-- A right-3 pivot is confirmed only three 4h candles later. This is intentional
+- A structure is confirmed only by the candles that follow it. This is intentional
   anti-repainting behavior and should be stated in the UI.
 - Add parameter backtests before changing 5x, 10-day or pivot settings. Store an
   `algorithm_version` with every result.

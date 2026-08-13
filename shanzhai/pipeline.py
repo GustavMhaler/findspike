@@ -10,7 +10,7 @@ from .binance_api import BinancePublicClient
 from .domain import closed_candles, newest_volume_spike
 from .smc import scan_smc
 
-ALGORITHM_VERSION = "volume-spike-v2+smc-swing50-internal5-bos-choch-v1"
+ALGORITHM_VERSION = "volume-spike-v2+smc-swing50-internal5-bos-choch-1h-v1"
 
 
 def _read_json(path: Path, fallback):
@@ -72,7 +72,7 @@ def scan_choch(client: BinancePublicClient, state_dir: Path, now: datetime, seed
     failures: list[dict] = []
 
     def scan(item: dict):
-        candles = closed_candles(client.candles(item["symbol"], "4h", 180), now)
+        candles = closed_candles(client.candles(item["symbol"], "1h", 300), now)
         events = scan_smc(candles)
         result = []
         for event in events:

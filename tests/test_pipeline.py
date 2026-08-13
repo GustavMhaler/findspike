@@ -96,7 +96,7 @@ class TestComposeLatest:
         scan_choch(FakeClient(now, breakouts={"AAAUSDT"}), state_dir, now)
         latest = compose_latest(state_dir, now)
         assert latest["schema_version"] == 2
-        assert latest["algorithm_version"] == "volume-spike-v2+smc-swing50-internal5-bos-choch-v1"
+        assert latest["algorithm_version"] == "volume-spike-v2+smc-swing50-internal5-bos-choch-1h-v1"
         assert latest["status"] == "ok"
         assert latest["timezone"] == "Asia/Shanghai"
         assert latest["generated_at"] == now.isoformat()

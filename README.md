@@ -1,6 +1,6 @@
 # Shanzhai Signal Desk
 
-Static Binance volume-spike and 4-hour BOS/CHoCH signal dashboard for
+Static Binance volume-spike and 1-hour BOS/CHoCH signal dashboard for
 `shanzhai.shaojiang61.site`.
 
 See [docs/PLAN.md](docs/PLAN.md) for the implementation plan and

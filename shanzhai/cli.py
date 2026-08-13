@@ -3,7 +3,7 @@
 Commands:
 
   daily   refresh the volume-spike universe and republish the site
-  coach   evaluate newly closed 4h candles, republish, request digest delivery
+  coach   evaluate newly closed 1h candles, republish, request digest delivery
   demo    build a sample site from deterministic synthetic data (no network)
   check   exit non-zero when the published site is stale
 
@@ -28,7 +28,7 @@ from .site import build_site
 
 ALERT_AFTER_CONSECUTIVE_FAILURES = 3
 DAILY_STALE_AFTER = timedelta(hours=26)
-COACH_STALE_AFTER = timedelta(hours=5)
+COACH_STALE_AFTER = timedelta(hours=2)
 
 ENV_WORKER_URL = "WORKER_URL"
 ENV_DIGEST_SECRET = "DIGEST_SECRET"
@@ -176,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
     p_daily.add_argument("--workers", type=int, default=6)
     p_daily.set_defaults(func=cmd_daily)
 
-    p_choch = sub.add_parser("choch", help="evaluate closed 4h candles for BOS/CHoCH, republish, deliver digest")
+    p_choch = sub.add_parser("choch", help="evaluate closed 1h candles for BOS/CHoCH, republish, deliver digest")
     p_choch.add_argument("--output", default="public")
     p_choch.add_argument("--state", default="state")
     p_choch.add_argument("--workers", type=int, default=6)
@@ -209,7 +209,7 @@ class _DemoClient(BinancePublicClient):
     def candles(self, symbol: str, interval: str, limit: int) -> list[Candle]:
         if interval == "1d":
             return self._daily(symbol)
-        return self._four_hour(symbol)
+        return self._hourly(symbol)
 
     def _daily(self, symbol: str) -> list[Candle]:
         today = self.now.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -228,7 +228,7 @@ class _DemoClient(BinancePublicClient):
             )
         return candles
 
-    def _four_hour(self, symbol: str) -> list[Candle]:
+    def _hourly(self, symbol: str) -> list[Candle]:
         """Deterministic internal-layer bullish BOS ending on the last candle.
 
         index 2 deep low -> leg 0->1; index 9 high 110 -> leg 1->0 (swing high
@@ -236,7 +236,6 @@ class _DemoClient(BinancePublicClient):
         """
         pattern = symbol == "FLATUSDT"
         boundary = self.now.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
-        boundary = boundary - timedelta(hours=boundary.hour % 4)
         candles = []
         for i in range(40, 0, -1):
             close_t = boundary - timedelta(hours=i - 1)
