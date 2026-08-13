@@ -129,6 +129,27 @@ td.down { color: var(--down); }
 .spark-last { fill: var(--primary); }
 .anti-repaint { margin-top: 12px; font-size: 12px; color: var(--muted); }
 
+.review-summary {
+  display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline;
+  padding: 10px 0 14px; border-bottom: 1px solid var(--hairline);
+  font-size: 13px; margin-bottom: 6px;
+}
+.review-count { font-weight: 600; color: #fff; }
+.review-rate { color: var(--primary); font-weight: 600; }
+.review-hits { color: var(--up); }
+.review-partials { color: var(--primary-active); }
+.review-misses { color: var(--down); }
+.review-row { padding: 10px 0; border-bottom: 1px solid var(--hairline); }
+.review-row:last-of-type { border-bottom: none; }
+.review-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.review-tag { font-size: 11px; color: var(--muted-2); border: 1px solid var(--hairline); border-radius: 3px; padding: 1px 5px; }
+.review-time { font-size: 11px; color: var(--muted); margin-left: auto; }
+.verdict { font-size: 12px; font-weight: 600; padding: 1px 7px; border-radius: 4px; }
+.verdict.hit { color: var(--up); border: 1px solid var(--up); }
+.verdict.partial { color: var(--primary); border: 1px solid var(--primary); }
+.verdict.miss { color: var(--down); border: 1px solid var(--down); }
+.review-reason { margin-top: 4px; font-size: 12px; color: var(--muted-2); }
+
 .subscribe { margin: 24px 0; }
 .subscribe form { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
 .subscribe input[type="email"] {
@@ -356,6 +377,62 @@ def _history_rows(history: list[dict]) -> str:
     )
 
 
+def _reviews_card(reviews: dict) -> str:
+    total = reviews.get("evaluated_count", 0)
+    hits = reviews.get("hit_count", 0)
+    partials = reviews.get("partial_count", 0)
+    misses = reviews.get("miss_count", 0)
+    rate = reviews.get("hit_rate")
+
+    if not reviews.get("ai_configured", False):
+        body = "<div class='empty'>AI 复盘未配置 — 请在部署环境中填写 AI_API_KEY（见 deploy/shanzhai.env.example）。</div>"
+    elif total == 0:
+        body = "<div class='empty'>暂无复盘数据 — 新信号触发满 24 小时后自动评估。</div>"
+    else:
+        summary = (
+            f"<div class='review-summary'>"
+            f"<span class='review-count'>已评估 {total}</span>"
+            f"<span class='review-rate'>命中率 {rate:.1%}</span>"
+            f"<span class='review-hits'>{hits} 命中</span>"
+            f"<span class='review-partials'>{partials} 部分</span>"
+            f"<span class='review-misses'>{misses} 未中</span>"
+            "</div>"
+        )
+        rows = []
+        for item in reviews.get("recent", [])[:10]:
+            bullish = item["direction"] == "bullish"
+            arrow = "▲" if bullish else "▼"
+            color = "up" if bullish else "down"
+            change = item["change_pct"]
+            move = f"<span class='num {color}'>{'+' if change >= 0 else ''}{change:.2f}%</span>"
+            badge = {
+                "hit": "<span class='verdict hit'>✓ 命中</span>",
+                "partial": "<span class='verdict partial'>~ 部分</span>",
+                "miss": "<span class='verdict miss'>✗ 未中</span>",
+            }.get(item.get("verdict", "miss"), "")
+            rows.append(
+                "<div class='review-row'>"
+                f"<div class='review-top'>"
+                f"<span class='symbol'>{html.escape(item['symbol'])}</span>"
+                f"<span class='num {color}'>{arrow}</span>"
+                f"<span class='review-tag'>{html.escape(item.get('tag', ''))}</span>"
+                f"{move}"
+                f"{badge}"
+                f"<span class='review-time num'>{_fmt_dt(item['evaluated_at'])}</span>"
+                "</div>"
+                f"<div class='review-reason'>{html.escape(item.get('reason', ''))}</div>"
+                "</div>"
+            )
+        body = summary + "".join(rows)
+    return (
+        "<section class='card'>"
+        "<h2>AI 复盘</h2>"
+        "<p class='sub'>信号触发 24 小时后的涨跌回测与 AI 准确度评估。</p>"
+        f"{body}"
+        "</section>"
+    )
+
+
 def _page_html(latest: dict, site_key: str) -> str:
     spikes = latest.get("volume_spikes", [])
     choch = latest.get("choch", {})
@@ -425,6 +502,8 @@ def _page_html(latest: dict, site_key: str) -> str:
       <p class="sub">Close crossing a confirmed structure level. Last scan {_fmt_dt(choch.get('latest_scan_at') or generated)}.</p>
       {_signal_cards(signals)}
     </section>
+
+    {_reviews_card(latest.get("reviews", {}))}
 
     <section class="card">
       <h2>CHoCH history</h2>

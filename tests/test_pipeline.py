@@ -51,7 +51,7 @@ class TestScanCoach:
         signal = result["signals"][0]
         assert signal["symbol"] == "AAAUSDT"
         assert signal["notify"] is True
-        assert signal["key"].startswith("AAAUSDT:internal:BOS:")
+        assert signal["key"].startswith("AAAUSDT:swing:BOS:")
         assert len(signal["trace"]) == 40
         assert result["data_candle_through"] is not None
 

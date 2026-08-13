@@ -24,6 +24,7 @@ from .binance_api import BinancePublicClient
 from .domain import Candle, UTC
 from .notify import build_admin_alert_payload, build_digest_payload, request_delivery
 from .pipeline import compose_latest, read_status_sidecar, scan_choch, scan_daily, write_status_sidecar
+from .review import call_llm, evaluate_pending, llm_config
 from .site import build_site
 
 ALERT_AFTER_CONSECUTIVE_FAILURES = 3
@@ -133,6 +134,29 @@ def cmd_choch(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_review(args: argparse.Namespace) -> int:
+    now = datetime.now(UTC)
+    state = Path(args.state)
+    config = llm_config()
+    if config is None:
+        print("review skipped: AI_API_KEY not configured (see deploy/shanzhai.env.example)")
+        return 0
+    try:
+        summary = evaluate_pending(_client(), state, now, lambda prompt: call_llm(config, prompt))
+        print(
+            f"review ok: evaluated {summary['evaluated']}, "
+            f"fetch failures {summary['fetch_failures']}, llm failures {summary['llm_failures']}"
+        )
+        if summary["evaluated"]:
+            latest = compose_latest(state, now)
+            build_site(Path(args.output), latest, site_key=_site_key())
+            print(f"site rebuilt with {summary['evaluated']} new reviews")
+        return 0
+    except Exception as exc:
+        print(f"review failed: {exc}", file=sys.stderr)
+        return 1
+
+
 def cmd_demo(args: argparse.Namespace) -> int:
     now = datetime.now(UTC)
     state = Path(args.state)
@@ -183,6 +207,11 @@ def main(argv: list[str] | None = None) -> int:
     p_choch.add_argument("--seed", action="store_true", help="record history without sending anything")
     p_choch.set_defaults(func=cmd_choch)
 
+    p_review = sub.add_parser("review", help="evaluate signals matured 24h ago via AI and republish")
+    p_review.add_argument("--output", default="public")
+    p_review.add_argument("--state", default="state")
+    p_review.set_defaults(func=cmd_review)
+
     p_demo = sub.add_parser("demo", help="build a sample site from synthetic data")
     p_demo.add_argument("--output", default="public")
     p_demo.add_argument("--state", default="state")
@@ -206,7 +235,10 @@ class _DemoClient(BinancePublicClient):
     def usdt_symbols(self) -> list[str]:
         return ["BTCUSDT", "ETHUSDT", "SPKUSDT", "WAVYUSDT", "FLATUSDT", "QUIETUSDT"]
 
-    def candles(self, symbol: str, interval: str, limit: int) -> list[Candle]:
+    def candles(
+        self, symbol: str, interval: str, limit: int,
+        start_time: datetime | None = None, end_time: datetime | None = None,
+    ) -> list[Candle]:
         if interval == "1d":
             return self._daily(symbol)
         return self._hourly(symbol)
@@ -229,30 +261,31 @@ class _DemoClient(BinancePublicClient):
         return candles
 
     def _hourly(self, symbol: str) -> list[Candle]:
-        """Deterministic internal-layer bullish BOS ending on the last candle.
+        """Deterministic swing-layer bullish BOS ending on the last candle.
 
-        index 2 deep low -> leg 0->1; index 9 high 110 -> leg 1->0 (swing high
-        level); last candle close 112 crosses 110 with prev close 100 -> BOS.
+        Swing size 50: index 5 deep low -> leg 0->1 (confirmed at i=55);
+        index 15 high 110 -> leg 1->0 (confirmed at i=65); last candle close
+        112 crosses 110 with prev close 100 -> swing BOS.
         """
         pattern = symbol == "FLATUSDT"
         boundary = self.now.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
         candles = []
-        for i in range(40, 0, -1):
+        for i in range(80, 0, -1):
             close_t = boundary - timedelta(hours=i - 1)
-            open_t = close_t - timedelta(hours=4)
+            open_t = close_t - timedelta(hours=1)
             open_, high, low, close = 101.0, 105.0, 99.0, 102.0
             if pattern:
-                if i == 1:  # index 39 — crossing close
+                if i == 1:  # index 79 — crossing close
                     open_, high, low, close = 108.0, 115.0, 106.0, 112.0
-                elif i == 2:  # index 38 — previous close
+                elif i == 2:  # index 78 — previous close
                     open_, high, low, close = 100.0, 104.0, 98.0, 100.0
-                elif i == 31:  # index 9 — swing high candidate
+                elif i == 65:  # index 15 — swing high candidate
                     open_, high, low, close = 104.0, 110.0, 102.0, 105.0
-                elif i == 34:  # index 6
+                elif i == 60:  # index 20
                     open_, high, low, close = 100.0, 104.0, 98.0, 101.0
-                elif i == 36:  # index 4
+                elif i == 55:  # index 25
                     open_, high, low, close = 100.0, 104.0, 97.0, 101.0
-                elif i == 38:  # index 2 — deep low
+                elif i == 75:  # index 5 — deep low
                     open_, high, low, close = 95.0, 100.0, 80.0, 96.0
             candles.append(
                 Candle(open_t, close_t, open_, high, low, close, volume=100.0, quote_volume=10000.0)

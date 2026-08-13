@@ -38,8 +38,20 @@ class BinancePublicClient:
             if item["status"] == "TRADING" and item["quoteAsset"] == "USDT" and item.get("isSpotTradingAllowed", True)
         )
 
-    def candles(self, symbol: str, interval: str, limit: int) -> list[Candle]:
-        rows = self._get("/api/v3/klines", {"symbol": symbol, "interval": interval, "limit": limit})
+    def candles(
+        self,
+        symbol: str,
+        interval: str,
+        limit: int,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+    ) -> list[Candle]:
+        params: dict = {"symbol": symbol, "interval": interval, "limit": limit}
+        if start_time is not None:
+            params["startTime"] = int(start_time.timestamp() * 1000)
+        if end_time is not None:
+            params["endTime"] = int(end_time.timestamp() * 1000)
+        rows = self._get("/api/v3/klines", params)
         return [
             Candle(
                 open_time=datetime.fromtimestamp(row[0] / 1000, timezone.utc),

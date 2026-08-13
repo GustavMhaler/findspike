@@ -13,6 +13,8 @@
 ```bash
 python3 -m shanzhai.cli daily --output public --state state
 python3 -m shanzhai.cli choch --output public --state state
+python3 -m shanzhai.cli choch --output public --state state
+python3 -m shanzhai.cli review --output public --state state
 python3 -m shanzhai.cli demo --output public
 python3 -m shanzhai.cli check --output public   # exit 1 when the site or market data is stale
 ```

@@ -1,0 +1,16 @@
+# Shanzhai AI review — evaluates signals that matured 24h ago
+[Unit]
+Description=Shanzhai AI signal review and site rebuild
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=shaojiang61
+Group=shaojiang61
+WorkingDirectory=/home/shaojiang61/web/findspike
+EnvironmentFile=/etc/shanzhai.env
+ExecStart=/home/shaojiang61/web/findspike/.venv/bin/python -m shanzhai.cli review --output public --state state
+Nice=5
+StandardOutput=journal
+StandardError=journal

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
@@ -8,23 +7,24 @@ from pathlib import Path
 
 from .binance_api import BinancePublicClient
 from .domain import closed_candles, newest_volume_spike
+from .io_utils import read_json, write_json
+from .review import compose_reviews
 from .smc import scan_smc
 
 ALGORITHM_VERSION = "volume-spike-v2+smc-swing50-internal5-bos-choch-1h-v1"
 
+# Only swing-layer signals are emitted (page, history, email, reviews).
+# Internal-layer signals were too noisy; smc.py still computes them but the
+# pipeline drops them here.
+EMITTED_LAYERS = ("swing",)
+
 
 def _read_json(path: Path, fallback):
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return fallback
+    return read_json(path, fallback)
 
 
 def _write_json(path: Path, value) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporary.replace(path)
+    write_json(path, value)
 
 
 def scan_daily(client: BinancePublicClient, state_dir: Path, now: datetime, workers: int = 6) -> dict:
@@ -73,7 +73,7 @@ def scan_choch(client: BinancePublicClient, state_dir: Path, now: datetime, seed
 
     def scan(item: dict):
         candles = closed_candles(client.candles(item["symbol"], "1h", 300), now)
-        events = scan_smc(candles)
+        events = [e for e in scan_smc(candles) if e.layer in EMITTED_LAYERS]
         result = []
         for event in events:
             key = f'{item["symbol"]}:{event.key}'
@@ -139,7 +139,10 @@ def compose_latest(state_dir: Path, now: datetime) -> dict:
     choch = _read_json(state_dir / "choch.json", {})
     history = _read_json(state_dir / "choch_history.json", [])
     cutoff = now - timedelta(days=30)
-    history = [item for item in history if datetime.fromisoformat(item["signal_time"]) >= cutoff]
+    history = [
+        item for item in history
+        if datetime.fromisoformat(item["signal_time"]) >= cutoff and item.get("layer") in EMITTED_LAYERS
+    ]
     runtime = {k: daily.get(k) for k in ("symbols_total", "symbols_succeeded", "symbols_failed", "coverage", "duration_seconds")}
     return {
         "schema_version": 2, "algorithm_version": ALGORITHM_VERSION,
@@ -153,4 +156,5 @@ def compose_latest(state_dir: Path, now: datetime) -> dict:
             "signals": choch.get("signals", []),
             "history": history[:300],
         },
+        "reviews": compose_reviews(state_dir),
     }
