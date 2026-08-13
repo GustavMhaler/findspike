@@ -65,6 +65,19 @@ class TestScanCoach:
         history = json.loads((state_dir / "choch_history.json").read_text())
         assert len(history) == 1
 
+    def test_watch_pool_coverage_gate(self, now, state_dir):
+        self._seed_daily(state_dir, now)
+        client = FakeClient(now, breakouts={"AAAUSDT"}, fail_symbols={"AAAUSDT", "CCCUSDT", "DDDUSDT"})
+        with pytest.raises(RuntimeError, match="coverage"):
+            scan_choch(client, state_dir, now)
+        assert not (state_dir / "choch.json").exists()
+
+    def test_empty_watch_pool_passes(self, now, state_dir):
+        daily = json.loads((state_dir / "daily.json").read_text()) if (state_dir / "daily.json").exists() else {}
+        result = scan_choch(FakeClient(now, breakouts=set()), state_dir, now)
+        assert result["watch_count"] == 0
+        assert result["new_signal_count"] == 0
+
     def test_seed_records_history_without_notify(self, now, state_dir):
         self._seed_daily(state_dir, now)
         client = FakeClient(now, breakouts={"AAAUSDT"})

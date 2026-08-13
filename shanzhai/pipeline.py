@@ -105,7 +105,11 @@ def scan_choch(client: BinancePublicClient, state_dir: Path, now: datetime, seed
                         signals.append(signal)
                         sent.add(signal["key"])
             except Exception as exc:
-                failures.append({"symbol": jobs[job], "error": type(exc).__name__})
+                failures.append({"symbol": jobs[job], "error": f"{type(exc).__name__}: {str(exc)[:120]}"})
+
+    coverage = (len(active) - len(failures)) / len(active) if active else 1.0
+    if coverage < 0.9:
+        raise RuntimeError(f"choch watch-pool coverage {coverage:.1%} is below 90% ({len(failures)}/{len(active)} failed)")
 
     history = sorted(history + signals, key=lambda item: item["signal_time"], reverse=True)
     cutoff = now - timedelta(days=90)
