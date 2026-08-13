@@ -1,0 +1,15 @@
+[Unit]
+Description=Run Shanzhai Coach scan 5 minutes after each 4h candle close
+
+[Timer]
+OnCalendar=*-*-* 00:05:00 Asia/Shanghai
+OnCalendar=*-*-* 04:05:00 Asia/Shanghai
+OnCalendar=*-*-* 08:05:00 Asia/Shanghai
+OnCalendar=*-*-* 12:05:00 Asia/Shanghai
+OnCalendar=*-*-* 16:05:00 Asia/Shanghai
+OnCalendar=*-*-* 20:05:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

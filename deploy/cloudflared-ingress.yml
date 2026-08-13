@@ -1,0 +1,15 @@
+# Cloudflared ingress for Shanzhai — merge into /etc/cloudflared/config.yml.
+# Keep the terminal fallback ingress (http_status:404) LAST; ingress rules are
+# evaluated in order.
+#
+#   tunnel: <TUNNEL_ID>
+#   credentials-file: /etc/cloudflared/<TUNNEL_ID>.json
+#
+# ingress:
+#   - hostname: shanzhai.shaojiang61.site
+#     service: http://127.0.0.1:8088
+#   - service: http_status:404
+#
+# DNS: cloudflared tunnel route dns <TUNNEL_ID> shanzhai.shaojiang61.site
+# (The Worker route /api/subscriptions/* is added separately in Cloudflare
+#  dashboard; it matches before tunnel ingress.)

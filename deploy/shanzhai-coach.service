@@ -1,0 +1,16 @@
+# Shanzhai Coach scan — 5 minutes after every 4h candle closes (00/04/08/12/16/20)
+[Unit]
+Description=Shanzhai Coach 4h breakout scan, site build and digest delivery
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=shaojiang61
+Group=shaojiang61
+WorkingDirectory=/home/shaojiang61/web/findspike
+EnvironmentFile=/etc/shanzhai.env
+ExecStart=/home/shaojiang61/web/findspike/.venv/bin/python -m shanzhai.cli coach --output public --state state
+Nice=5
+StandardOutput=journal
+StandardError=journal

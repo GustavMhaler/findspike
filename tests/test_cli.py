@@ -1,0 +1,108 @@
+import json
+from datetime import datetime, timezone
+
+import pytest
+
+import shanzhai.cli as cli
+from conftest import FakeClient
+
+UTC = timezone.utc
+
+
+@pytest.fixture
+def fake_client(monkeypatch):
+    client = FakeClient(datetime(2026, 8, 11, 4, 50, tzinfo=UTC), breakouts={"AAAUSDT"})
+    monkeypatch.setattr(cli, "_client", lambda: client)
+    return client
+
+
+def test_demo_builds_deterministic_site(tmp_path):
+    output = tmp_path / "public"
+    state = tmp_path / "state"
+    assert cli.main(["demo", "--output", str(output), "--state", str(state)]) == 0
+    latest = json.loads((output / "data" / "latest.json").read_text())
+    symbols = [s["symbol"] for s in latest["volume_spikes"]]
+    assert "SPKUSDT" in symbols
+    assert [s["symbol"] for s in latest["coach"]["signals"]] == ["FLATUSDT"]
+    assert latest["coach"]["history"][0]["symbol"] == "FLATUSDT"
+    html = (output / "index.html").read_text()
+    assert "FLATUSDT" in html and "spark-pivot" in html
+
+
+def test_daily_and_coach_end_to_end(tmp_path, fake_client):
+    output = tmp_path / "public"
+    state = tmp_path / "state"
+    assert cli.main(["daily", "--output", str(output), "--state", str(state)]) == 0
+    assert cli.main(["coach", "--output", str(output), "--state", str(state)]) == 0
+    latest = json.loads((output / "data" / "latest.json").read_text())
+    assert latest["runtime"]["coverage"] == 1.0
+    assert latest["coach"]["new_signal_count"] == 1
+    assert latest["coach"]["signals"][0]["symbol"] == "AAAUSDT"
+    status = json.loads((state / "status.json").read_text())
+    assert status["consecutive_failures"] == 0
+    assert status["last_daily_success"] is not None
+    assert status["last_coach_success"] is not None
+
+
+def test_second_coach_run_is_idempotent(tmp_path, fake_client):
+    output = tmp_path / "public"
+    state = tmp_path / "state"
+    cli.main(["daily", "--output", str(output), "--state", str(state)])
+    cli.main(["coach", "--output", str(output), "--state", str(state)])
+    assert cli.main(["coach", "--output", str(output), "--state", str(state)]) == 0
+    latest = json.loads((output / "data" / "latest.json").read_text())
+    assert latest["coach"]["new_signal_count"] == 0
+    assert len(latest["coach"]["history"]) == 1
+
+
+def test_digest_skipped_without_secret(tmp_path, fake_client, monkeypatch):
+    output = tmp_path / "public"
+    state = tmp_path / "state"
+    monkeypatch.delenv("DIGEST_SECRET", raising=False)
+    monkeypatch.setenv("WORKER_URL", "https://worker.test")
+    cli.main(["daily", "--output", str(output), "--state", str(state)])
+    assert cli.main(["coach", "--output", str(output), "--state", str(state)]) == 0
+    status = json.loads((state / "status.json").read_text())
+    assert "DIGEST_SECRET" in status["last_notify"]["error"]
+
+
+def test_failure_records_status_sidecar(tmp_path, monkeypatch):
+    state = tmp_path / "state"
+
+    def failing_client():
+        raise RuntimeError("no network")
+
+    monkeypatch.setattr(cli, "_client", failing_client)
+    code = cli.main(["daily", "--output", str(tmp_path / "public"), "--state", str(state)])
+    assert code == 1
+    status = json.loads((state / "status.json").read_text())
+    assert status["consecutive_failures"] == 1
+    assert status["last_error"]["command"] == "daily"
+    assert not (tmp_path / "public").exists()
+
+
+def test_admin_alert_after_consecutive_failures(tmp_path, monkeypatch):
+    state = tmp_path / "state"
+    monkeypatch.setenv("DIGEST_SECRET", "s3cret")
+    monkeypatch.setenv("WORKER_URL", "https://worker.test")
+    monkeypatch.setattr(cli, "_client", lambda: (_ for _ in ()).throw(RuntimeError("down")))
+    codes = [cli.main(["daily", "--output", str(tmp_path / "public"), "--state", str(state)]) for _ in range(3)]
+    assert codes == [1, 1, 1]
+    status = json.loads((state / "status.json").read_text())
+    assert status["consecutive_failures"] == 3
+    assert status["last_notify"]["sent"] is False
+
+
+def test_check_fails_for_missing_site(tmp_path):
+    assert cli.main(["check", "--output", str(tmp_path / "nope")]) == 1
+
+
+def test_check_fails_for_stale_site(tmp_path):
+    output = tmp_path / "public"
+    cli.main(["demo", "--output", str(output), "--state", str(tmp_path / "state")])
+    status_path = output / "status.json"
+    status = json.loads(status_path.read_text())
+    status["generated_at"] = "2026-01-01T00:00:00+00:00"
+    status["data_candle_through"] = "2026-01-01T00:00:00+00:00"
+    status_path.write_text(json.dumps(status))
+    assert cli.main(["check", "--output", str(output)]) == 1

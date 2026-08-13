@@ -1,0 +1,99 @@
+import json
+from pathlib import Path
+
+import pytest
+
+from shanzhai.site import build_site
+
+LATEST = {
+    "schema_version": 1,
+    "algorithm_version": "v-test",
+    "generated_at": "2026-08-11T04:00:00+00:00",
+    "timezone": "Asia/Shanghai",
+    "status": "ok",
+    "data_candle_through": "2026-08-11T04:00:00+00:00",
+    "runtime": {"coverage": 1.0, "duration_seconds": 1.2},
+    "volume_spikes": [
+        {
+            "symbol": "SPKUSDT", "date": "2026-08-10", "ratio": 8.0,
+            "volume": 8000.0, "quote_volume": 900000.0, "close": 116.0,
+            "watch_until": "2026-08-20",
+        }
+    ],
+    "coach": {
+        "latest_scan_at": "2026-08-11T04:00:00+00:00",
+        "new_signal_count": 1,
+        "signals": [
+            {
+                "symbol": "FLATUSDT", "signal_time": "2026-08-11T04:00:00+00:00",
+                "close": 112.0, "pivot_price": 110.0, "breakout_pct": 1.82,
+                "key": "FLATUSDT:4h:123", "trace": [101.0, 102.0, 103.0, 112.0],
+            }
+        ],
+        "history": [],
+    },
+}
+
+
+def test_build_site_writes_expected_files(tmp_path):
+    output = tmp_path / "public"
+    build_site(output, LATEST)
+    assert (output / "index.html").is_file()
+    assert (output / "status.json").is_file()
+    latest = json.loads((output / "data" / "latest.json").read_text())
+    assert latest["schema_version"] == 1
+    status = json.loads((output / "status.json").read_text())
+    assert status["generated_at"] == LATEST["generated_at"]
+    assert status["status"] == "ok"
+
+
+def test_page_contains_data_and_visual_tokens(tmp_path):
+    output = tmp_path / "public"
+    build_site(output, LATEST)
+    html = (output / "index.html").read_text()
+    assert "SPKUSDT" in html and "FLATUSDT" in html
+    assert "#0b0e11" in html and "#fcd535" in html and "#1e2329" in html
+    assert "spark-pivot" in html and "tabular-nums" in html
+    assert "data-tz='2026-08-11T04:00:00+00:00'" in html
+
+
+def test_atomic_swap_keeps_previous_site_on_failure(tmp_path, monkeypatch):
+    output = tmp_path / "public"
+    build_site(output, LATEST)
+    first_html = (output / "index.html").read_text()
+
+
+    def boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_text", boom)
+    with pytest.raises(OSError):
+        build_site(output, {**LATEST, "generated_at": "2026-08-12T00:00:00+00:00"})
+    monkeypatch.undo()
+    assert (output / "index.html").read_text() == first_html
+    assert not (tmp_path / "public.staging").exists()
+
+
+def test_subscription_form_absent_without_site_key(tmp_path):
+    output = tmp_path / "public"
+    build_site(output, LATEST)
+    assert "subscribe-form" not in (output / "index.html").read_text()
+
+
+def test_subscription_form_present_with_site_key(tmp_path):
+    output = tmp_path / "public"
+    build_site(output, LATEST, site_key="0xTESTKEY")
+    html = (output / "index.html").read_text()
+    assert "subscribe-form" in html
+    assert "0xTESTKEY" in html
+    assert "challenges.cloudflare.com/turnstile/v0/api.js" in html
+
+
+def test_escaping_of_malicious_symbol(tmp_path):
+    latest = json.loads(json.dumps(LATEST))
+    latest["volume_spikes"][0]["symbol"] = '<img src=x onerror=alert(1)>USDT'
+    output = tmp_path / "public"
+    build_site(output, latest)
+    html = (output / "index.html").read_text()
+    assert "<img src=x" not in html
+    assert "&lt;img" in html

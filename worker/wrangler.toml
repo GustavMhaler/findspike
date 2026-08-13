@@ -1,0 +1,17 @@
+name = "shanzhai-signal-desk"
+main = "index.js"
+compatibility_date = "2026-08-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "shanzhai"
+database_id = "036f40e1-7cda-4444-ad35-a6f3a08afedd"
+
+[vars]
+FROM_EMAIL = "desk@shanzhai.shaojiang61.site"
+ADMIN_EMAIL = "434367804@qq.com"
+BASE_URL = "https://shanzhai.shaojiang61.site"
+
+[[routes]]
+pattern = "shanzhai.shaojiang61.site/api/*"
+zone_name = "shaojiang61.site"
