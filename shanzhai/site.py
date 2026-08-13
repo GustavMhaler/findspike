@@ -546,8 +546,9 @@ def _page_html(latest: dict, site_key: str) -> str:
   function initSort() {{
     var headers = document.querySelectorAll("th[data-sort]");
     for (var i = 0; i < headers.length; i++) {{
-      var th = headers[i];
-      th.querySelector("button").addEventListener("click", function () {{ sortTable(th); }});
+      (function (th) {{
+        th.querySelector("button").addEventListener("click", function () {{ sortTable(th); }});
+      }})(headers[i]);
     }}
   }}
 
