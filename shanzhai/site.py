@@ -503,13 +503,13 @@ def _page_html(latest: dict, site_key: str) -> str:
       {_signal_cards(signals)}
     </section>
 
-    {_reviews_card(latest.get("reviews", {}))}
-
     <section class="card">
       <h2>CHoCH history</h2>
       <p class="sub">Confirmed breakouts from the last 30 days.</p>
       {_history_rows(history)}
     </section>
+
+    {_reviews_card(latest.get("reviews", {}))}
 
     <section class="card subscribe">
       <h2>Email notifications</h2>
