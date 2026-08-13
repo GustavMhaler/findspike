@@ -88,6 +88,15 @@ th {
   text-align: left; font-weight: 500; font-size: 12px; color: var(--muted);
   padding: 8px 12px; border-bottom: 1px solid var(--hairline); white-space: nowrap;
 }
+th[data-sort] button {
+  background: none; border: none; padding: 0; margin: 0;
+  font: inherit; color: inherit; cursor: pointer; white-space: nowrap;
+}
+th[data-sort] button:hover { color: var(--body); }
+th[data-sort] button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 2px; }
+th.sort-active { color: var(--body); }
+th.sort-active.sort-asc::after { content: " ▲"; color: var(--primary); }
+th.sort-active.sort-desc::after { content: " ▼"; color: var(--primary); }
 td { padding: 12px; border-bottom: 1px solid var(--hairline); white-space: nowrap; }
 tbody tr:last-child td { border-bottom: none; }
 tbody tr:hover { background: var(--surface-2); }
@@ -210,7 +219,14 @@ def _spike_rows(spikes: list[dict]) -> str:
     rows = []
     for index, spike in enumerate(spikes, 1):
         rows.append(
-            "<tr>"
+            "<tr"
+            f" data-idx='{index - 1}'"
+            f" data-symbol='{html.escape(spike['symbol'], quote=True)}'"
+            f" data-date='{html.escape(spike['date'], quote=True)}'"
+            f" data-ratio='{spike['ratio']}'"
+            f" data-volume='{spike['volume']}'"
+            f" data-quote='{spike['quote_volume']}'"
+            f" data-watch='{html.escape(spike['watch_until'], quote=True)}'>"
             f"<td class='num'>{index}</td>"
             f"<td class='symbol'>{html.escape(spike['symbol'])}</td>"
             f"<td class='num'>{html.escape(spike['date'])}</td>"
@@ -222,8 +238,13 @@ def _spike_rows(spikes: list[dict]) -> str:
         )
     return (
         "<div class='scroll'><table><thead><tr>"
-        "<th>#</th><th>Symbol</th><th>Spike Date</th><th>Ratio</th>"
-        "<th>Base Volume</th><th>Quote Volume</th><th>Watch Until</th>"
+        "<th scope='col'>#</th>"
+        "<th scope='col' data-sort='symbol' data-type='s'><button type='button'>Symbol</button></th>"
+        "<th scope='col' data-sort='date' data-type='s'><button type='button'>Spike Date</button></th>"
+        "<th scope='col' data-sort='ratio' data-type='n' class='sort-active sort-desc' aria-sort='descending'><button type='button'>Ratio</button></th>"
+        "<th scope='col' data-sort='volume' data-type='n'><button type='button'>Base Volume</button></th>"
+        "<th scope='col' data-sort='quote' data-type='n'><button type='button'>Quote Volume</button></th>"
+        "<th scope='col' data-sort='watch' data-type='s'><button type='button'>Watch Until</button></th>"
         "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>"
     )
 
@@ -300,11 +321,19 @@ def _history_rows(history: list[dict]) -> str:
     if not history:
         return "<div class='empty'>No BOS/CHoCH in the last 30 days.</div>"
     rows = []
-    for item in history:
+    for index, item in enumerate(history):
         breakout = item.get("breakout_pct", 0)
         direction = "up" if item.get("direction", "bullish") == "bullish" else "down"
         rows.append(
-            "<tr>"
+            "<tr"
+            f" data-idx='{index}'"
+            f" data-time='{html.escape(item['signal_time'], quote=True)}'"
+            f" data-symbol='{html.escape(item['symbol'], quote=True)}'"
+            f" data-tag='{html.escape(item.get('tag', ''), quote=True)}'"
+            f" data-layer='{html.escape(item.get('layer', ''), quote=True)}'"
+            f" data-level='{item['level']}'"
+            f" data-close='{item['close']}'"
+            f" data-move='{breakout}'>"
             f"<td class='num'>{_fmt_dt(item['signal_time'])}</td>"
             f"<td class='symbol'>{html.escape(item['symbol'])}</td>"
             f"<td>{_tag_badge(item)}</td>"
@@ -316,7 +345,13 @@ def _history_rows(history: list[dict]) -> str:
         )
     return (
         "<div class='scroll'><table><thead><tr>"
-        "<th>Signal Time</th><th>Symbol</th><th>Tag</th><th>Layer</th><th>Level</th><th>Close</th><th>Move</th>"
+        "<th scope='col' data-sort='time' data-type='s' class='sort-active sort-desc' aria-sort='descending'><button type='button'>Signal Time</button></th>"
+        "<th scope='col' data-sort='symbol' data-type='s'><button type='button'>Symbol</button></th>"
+        "<th scope='col' data-sort='tag' data-type='s'><button type='button'>Tag</button></th>"
+        "<th scope='col' data-sort='layer' data-type='s'><button type='button'>Layer</button></th>"
+        "<th scope='col' data-sort='level' data-type='n'><button type='button'>Level</button></th>"
+        "<th scope='col' data-sort='close' data-type='n'><button type='button'>Close</button></th>"
+        "<th scope='col' data-sort='move' data-type='n'><button type='button'>Move</button></th>"
         "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>"
     )
 
@@ -470,8 +505,55 @@ def _page_html(latest: dict, site_key: str) -> str:
 
   {subscribe_js}
 
+  function sortTable(th) {{
+    var table = th.closest("table");
+    var tbody = table.tBodies[0];
+    var key = th.getAttribute("data-sort");
+    var type = th.getAttribute("data-type");
+    var state = table.__sort || {{ key: null, dir: null }};
+    if (state.key !== key) {{
+      state = {{ key: key, dir: "asc" }};
+    }} else if (state.dir === "asc") {{
+      state = {{ key: key, dir: "desc" }};
+    }} else {{
+      state = {{ key: null, dir: null }};
+    }}
+    table.__sort = state;
+    var headers = table.querySelectorAll("th[data-sort]");
+    for (var j = 0; j < headers.length; j++) {{
+      headers[j].removeAttribute("aria-sort");
+      headers[j].classList.remove("sort-active", "sort-asc", "sort-desc");
+    }}
+    var rows = Array.prototype.slice.call(tbody.rows);
+    if (state.key) {{
+      var dir = state.dir === "desc" ? -1 : 1;
+      rows.sort(function (a, b) {{
+        var av = a.getAttribute("data-" + key);
+        var bv = b.getAttribute("data-" + key);
+        var cmp = type === "n" ? (parseFloat(av) - parseFloat(bv)) : av.localeCompare(bv);
+        return cmp * dir;
+      }});
+      th.setAttribute("aria-sort", state.dir === "asc" ? "ascending" : "descending");
+      th.classList.add("sort-active", "sort-" + state.dir);
+    }} else {{
+      rows.sort(function (a, b) {{
+        return parseInt(a.getAttribute("data-idx"), 10) - parseInt(b.getAttribute("data-idx"), 10);
+      }});
+    }}
+    for (var k = 0; k < rows.length; k++) tbody.appendChild(rows[k]);
+  }}
+
+  function initSort() {{
+    var headers = document.querySelectorAll("th[data-sort]");
+    for (var i = 0; i < headers.length; i++) {{
+      var th = headers[i];
+      th.querySelector("button").addEventListener("click", function () {{ sortTable(th); }});
+    }}
+  }}
+
   renderTimes();
   staleness();
+  initSort();
 }})();
 </script>
 </body>

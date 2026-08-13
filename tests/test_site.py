@@ -32,7 +32,13 @@ LATEST = {
                 "key": "FLATUSDT:internal:BOS:123", "trace": [101.0, 102.0, 103.0, 112.0],
             }
         ],
-        "history": [],
+        "history": [
+            {
+                "symbol": "MAVUSDT", "tag": "CHoCH", "direction": "bearish",
+                "layer": "swing", "signal_time": "2026-08-11T03:59:59.999000+00:00",
+                "level": 0.052, "close": 0.051, "breakout_pct": -1.92,
+            }
+        ],
     },
 }
 
@@ -57,6 +63,10 @@ def test_page_contains_data_and_visual_tokens(tmp_path):
     assert "#0b0e11" in html and "#fcd535" in html and "#1e2329" in html
     assert "spark-pivot" in html and "tabular-nums" in html
     assert "data-tz='2026-08-11T04:00:00+00:00'" in html
+    assert "data-ratio='8.0'" in html
+    assert "data-sort='ratio' data-type='n'" in html
+    assert "data-time='2026-08-11T03:59:59.999000+00:00'" in html
+    assert "function sortTable" in html
 
 
 def test_atomic_swap_keeps_previous_site_on_failure(tmp_path, monkeypatch):

@@ -73,7 +73,6 @@ class TestScanCoach:
         assert not (state_dir / "choch.json").exists()
 
     def test_empty_watch_pool_passes(self, now, state_dir):
-        daily = json.loads((state_dir / "daily.json").read_text()) if (state_dir / "daily.json").exists() else {}
         result = scan_choch(FakeClient(now, breakouts=set()), state_dir, now)
         assert result["watch_count"] == 0
         assert result["new_signal_count"] == 0
