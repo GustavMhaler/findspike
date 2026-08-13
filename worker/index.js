@@ -72,14 +72,16 @@ async function verifyTurnstile(token, ip) {
   return data.success === true;
 }
 
-async function sendEmail(to, subject, text) {
+async function sendEmail(to, subject, text, html) {
+  const body = { from: env.FROM_EMAIL, to, subject, text };
+  if (html) body.html = html;
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${env.RESEND_API_KEY}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ from: env.FROM_EMAIL, to, subject, text }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     throw new Error(`resend ${res.status}: ${(await res.text()).slice(0, 200)}`);
@@ -239,11 +241,11 @@ async function handleDeliver(request) {
   }
   if (body.kind === "admin_alert") {
     const text = [
-      `Shanzhai command ${body.command} failed:`,
+      `Shanzhai 命令 ${body.command} 执行失败：`,
       String(body.message || ""),
-      `at ${body.at || ""}`,
+      `时间：${body.at || ""}`,
     ].join("\n");
-    await sendEmail(env.ADMIN_EMAIL, "[Shanzhai] scan failure", text);
+    await sendEmail(env.ADMIN_EMAIL, "[Shanzhai] 扫描失败", text);
     return json({ sent: true });
   }
   if (body.kind !== "digest") {
@@ -251,6 +253,10 @@ async function handleDeliver(request) {
   }
   const signals = Array.isArray(body.signals) ? body.signals : [];
   if (!signals.length) return json({ sent: true, delivered: 0 });
+  // Noise control: only swing-layer signals are emailed; internal-layer
+  // signals stay visible on the dashboard page only.
+  const swingSignals = signals.filter((s) => s.layer === "swing");
+  if (!swingSignals.length) return json({ sent: true, delivered: 0, note: "internal only" });
 
   const { results: subscribers } = await env.DB.prepare(
     "SELECT email FROM subscribers WHERE status = 'active'"
@@ -261,39 +267,106 @@ async function handleDeliver(request) {
       "SELECT signal_key FROM deliveries WHERE email = ?"
     ).bind(subscriber.email).all();
     const doneKeys = new Set(done.map((r) => r.signal_key));
-    const fresh = signals.filter((s) => s.key && !doneKeys.has(s.key));
+    const fresh = swingSignals.filter((s) => s.key && !doneKeys.has(s.key));
     if (!fresh.length) continue;
 
-    const lines = [
-      `${fresh.length} new BOS/CHoCH signal(s) on Shanzhai Signal Desk:`,
-      "",
-    ];
-    const inserts = [];
-    for (const s of fresh) {
-      const move = Number(s.breakout_pct) >= 0 ? "+" : "";
-      const direction = s.direction === "bearish" ? "break below" : "break above";
-      lines.push(
-        `${s.symbol} [${s.tag}/${s.layer}]: close ${formatPrice(s.close)} ${direction} level ${formatPrice(s.level)} ` +
-          `(${move}${Number(s.breakout_pct).toFixed(2)}%)`
-      );
-      lines.push(`signal time: ${s.signal_time}`);
-      lines.push("");
-      inserts.push(
-        env.DB.prepare(
-          "INSERT OR IGNORE INTO deliveries (email, signal_key, created_at) VALUES (?, ?, ?)"
-        ).bind(subscriber.email, s.key, new Date().toISOString())
-      );
-    }
-    lines.push(env.BASE_URL);
-    lines.push("");
-    lines.push(
-      `Unsubscribe: ${env.BASE_URL}/api/unsubscribe?e=${encodeURIComponent(subscriber.email)}&t=${await unsubscribeToken(subscriber.email)}`
+    const subject = `Shanzhai 信号：${fresh.length} 个新 CHoCH（${fresh.filter((s) => s.direction === "bullish").length} 涨 ${fresh.filter((s) => s.direction === "bearish").length} 跌）`;
+    const unsubscribeUrl = `${env.BASE_URL}/api/unsubscribe?e=${encodeURIComponent(subscriber.email)}&t=${await unsubscribeToken(subscriber.email)}`;
+    const inserts = fresh.map((s) =>
+      env.DB.prepare(
+        "INSERT OR IGNORE INTO deliveries (email, signal_key, created_at) VALUES (?, ?, ?)"
+      ).bind(subscriber.email, s.key, new Date().toISOString())
     );
-    await sendEmail(subscriber.email, "New CHoCH signal — Shanzhai Signal Desk", lines.join("\n"));
+    await sendEmail(subscriber.email, subject, digestText(fresh, unsubscribeUrl), digestHtml(fresh, unsubscribeUrl));
     await env.DB.batch(inserts);
     delivered += fresh.length;
   }
   return json({ sent: true, delivered });
+}
+
+function beijingTime(iso) {
+  try {
+    return new Intl.DateTimeFormat("zh-CN", {
+      timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    }).format(new Date(iso));
+  } catch {
+    return String(iso);
+  }
+}
+
+function escHtml(value) {
+  return String(value).replace(/[&<>"']/g, (ch) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[ch]);
+}
+
+function digestText(signals, unsubscribeUrl) {
+  const lines = [`Shanzhai 新信号 ${signals.length} 个（${signals.filter((s) => s.direction === "bullish").length} 涨 ${signals.filter((s) => s.direction === "bearish").length} 跌）：`, ""];
+  for (const s of signals) {
+    const arrow = s.direction === "bullish" ? "▲" : "▼";
+    const verb = s.direction === "bullish" ? "突破" : "跌破";
+    const move = (Number(s.breakout_pct) >= 0 ? "+" : "") + Number(s.breakout_pct).toFixed(2) + "%";
+    lines.push(`${arrow} ${s.symbol} ${verb} ${formatPrice(s.level)}，收 ${formatPrice(s.close)}（${move}）`);
+    lines.push(`   时间：${beijingTime(s.signal_time)}`);
+    lines.push("");
+  }
+  lines.push(`${env.BASE_URL}（查看图表）`);
+  lines.push("");
+  lines.push("BOS = 顺势延续，CHoCH = 走势反转。");
+  lines.push(`退订：${unsubscribeUrl}`);
+  return lines.join("\n");
+}
+
+function digestHtml(signals, unsubscribeUrl) {
+  const up = signals.filter((s) => s.direction === "bullish").length;
+  const down = signals.length - up;
+  const rows = signals
+    .map((s) => {
+      const bullish = s.direction === "bullish";
+      const color = bullish ? "#0ecb81" : "#f6465d";
+      const arrow = bullish ? "▲" : "▼";
+      const verb = bullish ? "突破" : "跌破";
+      const move = (Number(s.breakout_pct) >= 0 ? "+" : "") + Number(s.breakout_pct).toFixed(2) + "%";
+      return `<tr>
+        <td style="padding:9px 12px;border-bottom:1px solid #eceff3;font-weight:600;white-space:nowrap">${escHtml(s.symbol)}</td>
+        <td style="padding:9px 12px;border-bottom:1px solid #eceff3;color:${color};white-space:nowrap">${arrow} ${bullish ? "看涨" : "看跌"}</td>
+        <td style="padding:9px 12px;border-bottom:1px solid #eceff3;white-space:nowrap">${escHtml(s.tag)}</td>
+        <td style="padding:9px 12px;border-bottom:1px solid #eceff3;white-space:nowrap">${verb} <b>${formatPrice(s.level)}</b></td>
+        <td style="padding:9px 12px;border-bottom:1px solid #eceff3;white-space:nowrap">${formatPrice(s.close)}</td>
+        <td style="padding:9px 12px;border-bottom:1px solid #eceff3;color:${color};white-space:nowrap">${move}</td>
+        <td style="padding:9px 12px;border-bottom:1px solid #eceff3;white-space:nowrap">${beijingTime(s.signal_time)}</td>
+      </tr>`;
+    })
+    .join("");
+  return `<!DOCTYPE html>
+<html><body style="margin:0;padding:0;background:#f7f8fa;font-family:'Helvetica Neue',Arial,sans-serif;font-size:14px;color:#181a20">
+<div style="max-width:640px;margin:0 auto;padding:24px 16px">
+  <div style="background:#0b0e11;color:#eaecef;border-radius:12px;padding:20px 24px;margin-bottom:16px">
+    <div style="font-size:18px;font-weight:700;color:#fcd535">Shanzhai 信号速报</div>
+    <div style="margin-top:6px;color:#929aa5">${signals.length} 个新信号 · <span style="color:#0ecb81">${up} 涨</span> · <span style="color:#f6465d">${down} 跌</span></div>
+  </div>
+  <div style="background:#ffffff;border:1px solid #eceff3;border-radius:12px;overflow:hidden">
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr style="background:#fafafa;color:#707a8a;font-size:12px">
+        <th style="text-align:left;padding:9px 12px">币种</th>
+        <th style="text-align:left;padding:9px 12px">方向</th>
+        <th style="text-align:left;padding:9px 12px">类型</th>
+        <th style="text-align:left;padding:9px 12px">价位</th>
+        <th style="text-align:left;padding:9px 12px">收盘</th>
+        <th style="text-align:left;padding:9px 12px">幅度</th>
+        <th style="text-align:left;padding:9px 12px">时间(北京)</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>
+  <p style="font-size:12px;color:#707a8a;line-height:1.7">
+    说明：BOS = 顺势延续，CHoCH = 走势反转（结构变化）。信号基于已收盘的 1 小时 K 线，结构确认后不会重绘。仅供研究参考，不构成投资建议。
+  </p>
+  <p style="font-size:13px"><a href="${escHtml(env.BASE_URL)}" style="color:#f0b90b;font-weight:600">打开仪表盘查看图表 →</a></p>
+  <p style="font-size:12px;color:#929aa5"><a href="${escHtml(unsubscribeUrl)}" style="color:#929aa5">退订通知</a> · 仅在新信号确认时发送，不会每天打扰</p>
+</div>
+</body></html>`;
 }
 
 export default {
