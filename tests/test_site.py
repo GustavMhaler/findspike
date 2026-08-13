@@ -6,7 +6,7 @@ import pytest
 from shanzhai.site import build_site
 
 LATEST = {
-    "schema_version": 1,
+    "schema_version": 2,
     "algorithm_version": "v-test",
     "generated_at": "2026-08-11T04:00:00+00:00",
     "timezone": "Asia/Shanghai",
@@ -20,14 +20,16 @@ LATEST = {
             "watch_until": "2026-08-20",
         }
     ],
-    "coach": {
+    "choch": {
         "latest_scan_at": "2026-08-11T04:00:00+00:00",
         "new_signal_count": 1,
         "signals": [
             {
-                "symbol": "FLATUSDT", "signal_time": "2026-08-11T04:00:00+00:00",
-                "close": 112.0, "pivot_price": 110.0, "breakout_pct": 1.82,
-                "key": "FLATUSDT:4h:123", "trace": [101.0, 102.0, 103.0, 112.0],
+                "symbol": "FLATUSDT", "tag": "BOS", "direction": "bullish",
+                "layer": "internal", "signal_time": "2026-08-11T04:00:00+00:00",
+                "structure_time": "2026-08-10T20:00:00+00:00",
+                "close": 112.0, "level": 110.0, "breakout_pct": 1.82,
+                "key": "FLATUSDT:internal:BOS:123", "trace": [101.0, 102.0, 103.0, 112.0],
             }
         ],
         "history": [],
@@ -41,7 +43,7 @@ def test_build_site_writes_expected_files(tmp_path):
     assert (output / "index.html").is_file()
     assert (output / "status.json").is_file()
     latest = json.loads((output / "data" / "latest.json").read_text())
-    assert latest["schema_version"] == 1
+    assert latest["schema_version"] == 2
     status = json.loads((output / "status.json").read_text())
     assert status["generated_at"] == LATEST["generated_at"]
     assert status["status"] == "ok"

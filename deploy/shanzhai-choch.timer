@@ -1,5 +1,5 @@
 [Unit]
-Description=Run Shanzhai Coach scan 5 minutes after each 4h candle close
+Description=Run Shanzhai CHoCH scan 5 minutes after each 4h candle close
 
 [Timer]
 OnCalendar=*-*-* 00:05:00 Asia/Shanghai

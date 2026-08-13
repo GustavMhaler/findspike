@@ -1,6 +1,6 @@
 # Shanzhai Signal Desk
 
-Static Binance volume-spike and 4-hour Coach signal dashboard for
+Static Binance volume-spike and 4-hour BOS/CHoCH signal dashboard for
 `shanzhai.shaojiang61.site`.
 
 See [docs/PLAN.md](docs/PLAN.md) for the implementation plan and
@@ -36,11 +36,11 @@ market data):
 
 ```bash
 .venv/bin/python -m shanzhai.cli daily --output public --state state
-.venv/bin/python -m shanzhai.cli coach --output public --state state
+.venv/bin/python -m shanzhai.cli choch --output public --state state
 .venv/bin/python -m shanzhai.cli check --output public   # non-zero when stale
 ```
 
-The `coach` command requests digest delivery only when new signals exist and
+The `choch` command requests digest delivery only when new signals exist and
 `WORKER_URL`/`DIGEST_SECRET` are configured in the environment (see
 `deploy/shanzhai.env.example`).
 

@@ -7,10 +7,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from .binance_api import BinancePublicClient
-from .domain import closed_candles, latest_breakout, newest_volume_spike
+from .domain import closed_candles, newest_volume_spike
+from .smc import scan_smc
 
-
-ALGORITHM_VERSION = "volume-spike-v2+coach-4h-pivot-3x3-v1"
+ALGORITHM_VERSION = "volume-spike-v2+smc-swing50-internal5-bos-choch-v1"
 
 
 def _read_json(path: Path, fallback):
@@ -62,50 +62,63 @@ def scan_daily(client: BinancePublicClient, state_dir: Path, now: datetime, work
     return result
 
 
-def scan_coach(client: BinancePublicClient, state_dir: Path, now: datetime, seed: bool = False, workers: int = 6) -> dict:
+def scan_choch(client: BinancePublicClient, state_dir: Path, now: datetime, seed: bool = False, workers: int = 6) -> dict:
     started = time.monotonic()
     daily = _read_json(state_dir / "daily.json", {})
     active = [s for s in daily.get("spikes", []) if s.get("watch_until", "") >= now.date().isoformat()]
-    sent = set(_read_json(state_dir / "coach_keys.json", []))
-    history = _read_json(state_dir / "coach_history.json", [])
+    sent = set(_read_json(state_dir / "choch_keys.json", []))
+    history = _read_json(state_dir / "choch_history.json", [])
     signals: list[dict] = []
     failures: list[dict] = []
 
     def scan(item: dict):
         candles = closed_candles(client.candles(item["symbol"], "4h", 180), now)
-        signal = latest_breakout(candles)
-        if signal:
-            signal["trace"] = [round(c.close, 8) for c in candles[-40:]]
-            signal = {**item, **signal, "key": f'{item["symbol"]}:{signal["dedupe_suffix"]}'}
-        return (signal, candles)
+        events = scan_smc(candles)
+        result = []
+        for event in events:
+            key = f'{item["symbol"]}:{event.key}'
+            result.append(
+                {
+                    "symbol": item["symbol"], "layer": event.layer, "tag": event.tag,
+                    "direction": event.direction, "level": round(event.level, 8),
+                    "close": round(event.close, 8), "previous_close": round(event.previous_close, 8),
+                    "signal_time": event.signal_time.isoformat(),
+                    "structure_time": event.structure_time.isoformat(),
+                    "breakout_pct": round(event.breakout_pct, 4),
+                    "trace": [round(c.close, 8) for c in candles[-40:]],
+                    "key": key,
+                }
+            )
+        return result, candles
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         jobs = {executor.submit(scan, item): item["symbol"] for item in active}
         through = None
         for job in as_completed(jobs):
             try:
-                signal, candles = job.result()
+                events, candles = job.result()
                 if candles:
                     through = max(through, candles[-1].close_time) if through else candles[-1].close_time
-                if signal and signal["key"] not in sent:
-                    signal["notify"] = not seed and now - datetime.fromisoformat(signal["signal_time"]) <= timedelta(hours=24)
-                    signals.append(signal)
-                    sent.add(signal["key"])
+                for signal in events:
+                    if signal["key"] not in sent:
+                        signal["notify"] = not seed and now - datetime.fromisoformat(signal["signal_time"]) <= timedelta(hours=24)
+                        signals.append(signal)
+                        sent.add(signal["key"])
             except Exception as exc:
                 failures.append({"symbol": jobs[job], "error": type(exc).__name__})
 
     history = sorted(history + signals, key=lambda item: item["signal_time"], reverse=True)
     cutoff = now - timedelta(days=90)
     history = [item for item in history if datetime.fromisoformat(item["signal_time"]) >= cutoff]
-    _write_json(state_dir / "coach_keys.json", sorted(sent))
-    _write_json(state_dir / "coach_history.json", history)
+    _write_json(state_dir / "choch_keys.json", sorted(sent))
+    _write_json(state_dir / "choch_history.json", history)
     result = {
         "scanned_at": now.isoformat(), "data_candle_through": through.isoformat() if through else None,
         "watch_count": len(active), "signals": signals, "new_signal_count": len(signals),
         "notify_count": sum(bool(s["notify"]) for s in signals), "failures": failures,
         "duration_seconds": round(time.monotonic() - started, 2),
     }
-    _write_json(state_dir / "coach.json", result)
+    _write_json(state_dir / "choch.json", result)
     return result
 
 
@@ -119,22 +132,21 @@ def write_status_sidecar(state_dir: Path, value: dict) -> None:
 
 def compose_latest(state_dir: Path, now: datetime) -> dict:
     daily = _read_json(state_dir / "daily.json", {})
-    coach = _read_json(state_dir / "coach.json", {})
-    history = _read_json(state_dir / "coach_history.json", [])
+    choch = _read_json(state_dir / "choch.json", {})
+    history = _read_json(state_dir / "choch_history.json", [])
     cutoff = now - timedelta(days=30)
     history = [item for item in history if datetime.fromisoformat(item["signal_time"]) >= cutoff]
     runtime = {k: daily.get(k) for k in ("symbols_total", "symbols_succeeded", "symbols_failed", "coverage", "duration_seconds")}
     return {
-        "schema_version": 1, "algorithm_version": ALGORITHM_VERSION,
+        "schema_version": 2, "algorithm_version": ALGORITHM_VERSION,
         "generated_at": now.isoformat(), "timezone": "Asia/Shanghai", "status": "ok",
-        "data_candle_through": coach.get("data_candle_through"),
+        "data_candle_through": choch.get("data_candle_through"),
         "runtime": runtime,
         "volume_spikes": daily.get("spikes", []),
-        "coach": {
-            "latest_scan_at": coach.get("scanned_at"),
-            "new_signal_count": coach.get("new_signal_count", 0),
-            "signals": coach.get("signals", []),
+        "choch": {
+            "latest_scan_at": choch.get("scanned_at"),
+            "new_signal_count": choch.get("new_signal_count", 0),
+            "signals": choch.get("signals", []),
             "history": history[:300],
         },
     }
-

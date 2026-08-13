@@ -8,7 +8,7 @@ Cloudflare/Resend credentials and privileged host configuration.
 Publish a static, mobile-friendly market dashboard at
 `https://shanzhai.shaojiang61.site`. At 06:00 Asia/Shanghai it refreshes the
 daily volume-spike universe. Five minutes after every closed Binance 4-hour
-candle it evaluates Coach breakouts, republishes the site, and sends one digest
+candle it evaluates CHoCH breakouts, republishes the site, and sends one digest
 only when new signals exist.
 
 The existing notebook remains a research artifact. Production uses the same
@@ -20,9 +20,14 @@ multi-page PDF are not a safe application data contract.
 - Volume spike v2: among the last 10 closed daily candles, use the newest candle
   whose base volume exceeds its preceding 7-candle average by 5x. Rank by the
   ratio and also display USDT quote volume.
-- Watch pool: a qualifying pair remains eligible for Coach for 10 days.
-- Coach: closed Binance 4h candles only; pivot high uses 3 candles on each side;
-  signal when `previous_close <= pivot_price < current_close`.
+- Watch pool: a qualifying pair remains eligible for CHoCH for 10 days.
+- CHoCH: closed Binance 4h candles only; LuxAlgo SMC port — swing structure
+  (size 50) and internal structure (size 5) levels are right-confirmed by the
+  candles that follow a swing bar (non-repainting); a level updates only on a
+  leg flip; a signal fires once per level when close crosses it, tagged BOS
+  (continuation) or CHoCH (reversal) against the running trend bias. Internal
+  signals additionally require the level to differ from the swing level and a
+  matching wick shape.
 - Idempotency key: symbol, interval and pivot candle open time. A newer confirmed
   pivot may trigger a later signal.
 - Initial import records history but sends no historical mail. Recovery scans
@@ -63,8 +68,8 @@ in status and retry logs.
 - `schema_version`, `algorithm_version`, `generated_at`, `timezone`;
 - `status`, `data_candle_through`, runtime duration and symbol success counts;
 - `volume_spikes` with symbol, date, ratio, base volume and quote volume;
-- `coach.signals`, `coach.latest_scan_at` and `coach.new_signal_count`;
-- a bounded 30-day Coach history for the UI.
+- `choch.signals`, `choch.latest_scan_at` and `choch.new_signal_count`;
+- a bounded 30-day CHoCH history for the UI.
 
 Private notification state and subscriber data never enter `public/`.
 
@@ -73,7 +78,7 @@ Private notification state and subscriber data never enter `public/`.
 The page follows `DESIGN.md`: near-black `#0b0e11`, flat card layers
 `#1e2329/#2b3139`, one yellow accent `#fcd535`, green/red only for market
 direction, thin borders, restrained radii, tabular financial figures and a
-light closing footer. The signature element is the Coach breakout trace: a
+light closing footer. The signature element is the CHoCH breakout trace: a
 quiet mini price line crossing a yellow pivot rail. No gradients, glow or large
 red/green surfaces.
 
@@ -86,7 +91,7 @@ signal labels, 44px targets and reduced-motion support are mandatory.
 1. Pipeline: unit-tested pivot/breakout, closed-candle filtering, volume v2 and
    idempotency. Partial market coverage below 90% fails the publish.
 2. Static build: valid latest JSON, responsive page, update/staleness state,
-   Coach history, report link and subscription states.
+   CHoCH history, report link and subscription states.
 3. Worker: verified Turnstile, hashed tokens, double opt-in, unsubscribe,
    throttling and Resend integration; no secrets in source.
 4. Operations: systemd oneshot/timers, atomic deployment, bounded logs,
@@ -100,7 +105,7 @@ signal labels, 44px targets and reduced-motion support are mandatory.
   exchange metadata and expose coverage. A proxy is an operational fallback,
   not embedded application behavior.
 - Scanning every pair serially is slow. Use conservative bounded concurrency
-  while respecting Binance weights; cache unchanged daily data between Coach
+  while respecting Binance weights; cache unchanged daily data between CHoCH
   scans.
 - A right-3 pivot is confirmed only three 4h candles later. This is intentional
   anti-repainting behavior and should be stated in the UI.

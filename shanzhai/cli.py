@@ -23,7 +23,7 @@ from pathlib import Path
 from .binance_api import BinancePublicClient
 from .domain import Candle, UTC
 from .notify import build_admin_alert_payload, build_digest_payload, request_delivery
-from .pipeline import compose_latest, read_status_sidecar, scan_coach, scan_daily, write_status_sidecar
+from .pipeline import compose_latest, read_status_sidecar, scan_choch, scan_daily, write_status_sidecar
 from .site import build_site
 
 ALERT_AFTER_CONSECUTIVE_FAILURES = 3
@@ -51,7 +51,7 @@ def _record_success(status: dict, command: str, state: Path, now: datetime) -> d
     if command == "daily":
         status["last_daily_success"] = now.isoformat()
     else:
-        status["last_coach_success"] = now.isoformat()
+        status["last_choch_success"] = now.isoformat()
     status["last_build"] = now.isoformat()
     write_status_sidecar(state, status)
     return status
@@ -110,16 +110,16 @@ def cmd_daily(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_coach(args: argparse.Namespace) -> int:
+def cmd_choch(args: argparse.Namespace) -> int:
     now = datetime.now(UTC)
     state = Path(args.state)
     try:
-        result = scan_coach(_client(), state, now, seed=args.seed, workers=args.workers)
+        result = scan_choch(_client(), state, now, seed=args.seed, workers=args.workers)
         latest = compose_latest(state, now)
         build_site(Path(args.output), latest, site_key=_site_key())
-        _record_success(read_status_sidecar(state), "coach", state, now)
+        _record_success(read_status_sidecar(state), "choch", state, now)
         print(
-            f"coach ok: {result['watch_count']} watched, {result['new_signal_count']} new, "
+            f"choch ok: {result['watch_count']} watched, {result['new_signal_count']} new, "
             f"{result['notify_count']} to notify in {result['duration_seconds']}s"
         )
         if not args.seed and result["notify_count"]:
@@ -127,9 +127,9 @@ def cmd_coach(args: argparse.Namespace) -> int:
             print(f"digest delivery: {summary}")
         return 0
     except Exception as exc:
-        _record_failure(read_status_sidecar(state), "coach", state, now, str(exc))
-        _maybe_admin_alert(state, "coach", str(exc))
-        print(f"coach failed: {exc}", file=sys.stderr)
+        _record_failure(read_status_sidecar(state), "choch", state, now, str(exc))
+        _maybe_admin_alert(state, "choch", str(exc))
+        print(f"choch failed: {exc}", file=sys.stderr)
         return 1
 
 
@@ -139,7 +139,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
     state.mkdir(parents=True, exist_ok=True)
     client = _DemoClient(now)
     scan_daily(client, state, now, workers=args.workers)
-    scan_coach(client, state, now, seed=True, workers=args.workers)
+    scan_choch(client, state, now, seed=True, workers=args.workers)
     latest = compose_latest(state, now)
     build_site(Path(args.output), latest, site_key=_site_key())
     print(f"demo ok: site built at {args.output}")
@@ -176,12 +176,12 @@ def main(argv: list[str] | None = None) -> int:
     p_daily.add_argument("--workers", type=int, default=6)
     p_daily.set_defaults(func=cmd_daily)
 
-    p_coach = sub.add_parser("coach", help="evaluate closed 4h candles, republish, deliver digest")
-    p_coach.add_argument("--output", default="public")
-    p_coach.add_argument("--state", default="state")
-    p_coach.add_argument("--workers", type=int, default=6)
-    p_coach.add_argument("--seed", action="store_true", help="record history without sending anything")
-    p_coach.set_defaults(func=cmd_coach)
+    p_choch = sub.add_parser("choch", help="evaluate closed 4h candles for BOS/CHoCH, republish, deliver digest")
+    p_choch.add_argument("--output", default="public")
+    p_choch.add_argument("--state", default="state")
+    p_choch.add_argument("--workers", type=int, default=6)
+    p_choch.add_argument("--seed", action="store_true", help="record history without sending anything")
+    p_choch.set_defaults(func=cmd_choch)
 
     p_demo = sub.add_parser("demo", help="build a sample site from synthetic data")
     p_demo.add_argument("--output", default="public")
@@ -229,25 +229,32 @@ class _DemoClient(BinancePublicClient):
         return candles
 
     def _four_hour(self, symbol: str) -> list[Candle]:
-        breakout = symbol == "FLATUSDT"
+        """Deterministic internal-layer bullish BOS ending on the last candle.
+
+        index 2 deep low -> leg 0->1; index 9 high 110 -> leg 1->0 (swing high
+        level); last candle close 112 crosses 110 with prev close 100 -> BOS.
+        """
+        pattern = symbol == "FLATUSDT"
         boundary = self.now.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
         boundary = boundary - timedelta(hours=boundary.hour % 4)
         candles = []
         for i in range(40, 0, -1):
             close_t = boundary - timedelta(hours=i - 1)
             open_t = close_t - timedelta(hours=4)
-            if breakout and i == 1:
-                open_, high, low, close = 111.0, 113.0, 110.0, 112.0
-            elif breakout and i == 2:
-                open_, high, low, close = 107.0, 109.0, 106.0, 108.0
-            elif breakout and i == 5:
-                open_, high, low, close = 105.0, 110.0, 104.0, 106.0
-            elif breakout and i == 3:
-                open_, high, low, close = 105.0, 106.0, 103.0, 104.0
-            elif breakout and i == 4:
-                open_, high, low, close = 104.0, 105.0, 102.0, 103.0
-            else:
-                open_, high, low, close = 101.0, 105.0, 99.0, 102.0
+            open_, high, low, close = 101.0, 105.0, 99.0, 102.0
+            if pattern:
+                if i == 1:  # index 39 — crossing close
+                    open_, high, low, close = 108.0, 115.0, 106.0, 112.0
+                elif i == 2:  # index 38 — previous close
+                    open_, high, low, close = 100.0, 104.0, 98.0, 100.0
+                elif i == 31:  # index 9 — swing high candidate
+                    open_, high, low, close = 104.0, 110.0, 102.0, 105.0
+                elif i == 34:  # index 6
+                    open_, high, low, close = 100.0, 104.0, 98.0, 101.0
+                elif i == 36:  # index 4
+                    open_, high, low, close = 100.0, 104.0, 97.0, 101.0
+                elif i == 38:  # index 2 — deep low
+                    open_, high, low, close = 95.0, 100.0, 80.0, 96.0
             candles.append(
                 Candle(open_t, close_t, open_, high, low, close, volume=100.0, quote_volume=10000.0)
             )

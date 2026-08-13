@@ -11,7 +11,7 @@ UTC = timezone.utc
 
 @pytest.fixture
 def fake_client(monkeypatch):
-    client = FakeClient(datetime(2026, 8, 11, 4, 50, tzinfo=UTC), breakouts={"AAAUSDT"})
+    client = FakeClient(datetime.now(UTC), breakouts={"AAAUSDT"})
     monkeypatch.setattr(cli, "_client", lambda: client)
     return client
 
@@ -23,36 +23,36 @@ def test_demo_builds_deterministic_site(tmp_path):
     latest = json.loads((output / "data" / "latest.json").read_text())
     symbols = [s["symbol"] for s in latest["volume_spikes"]]
     assert "SPKUSDT" in symbols
-    assert [s["symbol"] for s in latest["coach"]["signals"]] == ["FLATUSDT"]
-    assert latest["coach"]["history"][0]["symbol"] == "FLATUSDT"
+    assert [s["symbol"] for s in latest["choch"]["signals"]] == ["FLATUSDT"]
+    assert latest["choch"]["history"][0]["symbol"] == "FLATUSDT"
     html = (output / "index.html").read_text()
     assert "FLATUSDT" in html and "spark-pivot" in html
 
 
-def test_daily_and_coach_end_to_end(tmp_path, fake_client):
+def test_daily_and_choch_end_to_end(tmp_path, fake_client):
     output = tmp_path / "public"
     state = tmp_path / "state"
     assert cli.main(["daily", "--output", str(output), "--state", str(state)]) == 0
-    assert cli.main(["coach", "--output", str(output), "--state", str(state)]) == 0
+    assert cli.main(["choch", "--output", str(output), "--state", str(state)]) == 0
     latest = json.loads((output / "data" / "latest.json").read_text())
     assert latest["runtime"]["coverage"] == 1.0
-    assert latest["coach"]["new_signal_count"] == 1
-    assert latest["coach"]["signals"][0]["symbol"] == "AAAUSDT"
+    assert latest["choch"]["new_signal_count"] == 1
+    assert latest["choch"]["signals"][0]["symbol"] == "AAAUSDT"
     status = json.loads((state / "status.json").read_text())
     assert status["consecutive_failures"] == 0
     assert status["last_daily_success"] is not None
-    assert status["last_coach_success"] is not None
+    assert status["last_choch_success"] is not None
 
 
-def test_second_coach_run_is_idempotent(tmp_path, fake_client):
+def test_second_choch_run_is_idempotent(tmp_path, fake_client):
     output = tmp_path / "public"
     state = tmp_path / "state"
     cli.main(["daily", "--output", str(output), "--state", str(state)])
-    cli.main(["coach", "--output", str(output), "--state", str(state)])
-    assert cli.main(["coach", "--output", str(output), "--state", str(state)]) == 0
+    cli.main(["choch", "--output", str(output), "--state", str(state)])
+    assert cli.main(["choch", "--output", str(output), "--state", str(state)]) == 0
     latest = json.loads((output / "data" / "latest.json").read_text())
-    assert latest["coach"]["new_signal_count"] == 0
-    assert len(latest["coach"]["history"]) == 1
+    assert latest["choch"]["new_signal_count"] == 0
+    assert len(latest["choch"]["history"]) == 1
 
 
 def test_digest_skipped_without_secret(tmp_path, fake_client, monkeypatch):
@@ -61,7 +61,7 @@ def test_digest_skipped_without_secret(tmp_path, fake_client, monkeypatch):
     monkeypatch.delenv("DIGEST_SECRET", raising=False)
     monkeypatch.setenv("WORKER_URL", "https://worker.test")
     cli.main(["daily", "--output", str(output), "--state", str(state)])
-    assert cli.main(["coach", "--output", str(output), "--state", str(state)]) == 0
+    assert cli.main(["choch", "--output", str(output), "--state", str(state)]) == 0
     status = json.loads((state / "status.json").read_text())
     assert "DIGEST_SECRET" in status["last_notify"]["error"]
 

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from conftest import FakeClient
-from shanzhai.pipeline import compose_latest, scan_coach, scan_daily
+from shanzhai.pipeline import compose_latest, scan_choch, scan_daily
 
 UTC = timezone.utc
 
@@ -46,29 +46,29 @@ class TestScanCoach:
     def test_detects_breakout_and_sets_notify(self, now, state_dir):
         self._seed_daily(state_dir, now)
         client = FakeClient(now, breakouts={"AAAUSDT"})
-        result = scan_coach(client, state_dir, now)
+        result = scan_choch(client, state_dir, now)
         assert result["new_signal_count"] == 1
         signal = result["signals"][0]
         assert signal["symbol"] == "AAAUSDT"
         assert signal["notify"] is True
-        assert signal["key"].startswith("AAAUSDT:4h:")
+        assert signal["key"].startswith("AAAUSDT:internal:BOS:")
         assert len(signal["trace"]) == 40
         assert result["data_candle_through"] is not None
 
     def test_idempotent_second_scan_sends_nothing(self, now, state_dir):
         self._seed_daily(state_dir, now)
         client = FakeClient(now, breakouts={"AAAUSDT"})
-        first = scan_coach(client, state_dir, now)
+        first = scan_choch(client, state_dir, now)
         assert first["new_signal_count"] == 1
-        second = scan_coach(client, state_dir, now)
+        second = scan_choch(client, state_dir, now)
         assert second["new_signal_count"] == 0
-        history = json.loads((state_dir / "coach_history.json").read_text())
+        history = json.loads((state_dir / "choch_history.json").read_text())
         assert len(history) == 1
 
     def test_seed_records_history_without_notify(self, now, state_dir):
         self._seed_daily(state_dir, now)
         client = FakeClient(now, breakouts={"AAAUSDT"})
-        result = scan_coach(client, state_dir, now, seed=True)
+        result = scan_choch(client, state_dir, now, seed=True)
         assert result["new_signal_count"] == 1
         assert result["signals"][0]["notify"] is False
         assert result["notify_count"] == 0
@@ -80,12 +80,12 @@ class TestScanCoach:
         for spike in daily["spikes"]:
             spike["watch_until"] = (now - timedelta(days=1)).date().isoformat()
         (state_dir / "daily.json").write_text(json.dumps(daily))
-        result = scan_coach(client, state_dir, now)
+        result = scan_choch(client, state_dir, now)
         assert result["watch_count"] == 0
         assert result["new_signal_count"] == 0
 
     def test_no_daily_state_means_no_scan(self, now, state_dir):
-        result = scan_coach(FakeClient(now, breakouts={"AAAUSDT"}), state_dir, now)
+        result = scan_choch(FakeClient(now, breakouts={"AAAUSDT"}), state_dir, now)
         assert result["watch_count"] == 0
         assert result["signals"] == []
 
@@ -93,10 +93,10 @@ class TestScanCoach:
 class TestComposeLatest:
     def test_contract(self, now, state_dir):
         scan_daily(FakeClient(now, breakouts={"AAAUSDT"}), state_dir, now)
-        scan_coach(FakeClient(now, breakouts={"AAAUSDT"}), state_dir, now)
+        scan_choch(FakeClient(now, breakouts={"AAAUSDT"}), state_dir, now)
         latest = compose_latest(state_dir, now)
-        assert latest["schema_version"] == 1
-        assert latest["algorithm_version"] == "volume-spike-v2+coach-4h-pivot-3x3-v1"
+        assert latest["schema_version"] == 2
+        assert latest["algorithm_version"] == "volume-spike-v2+smc-swing50-internal5-bos-choch-v1"
         assert latest["status"] == "ok"
         assert latest["timezone"] == "Asia/Shanghai"
         assert latest["generated_at"] == now.isoformat()
@@ -104,24 +104,24 @@ class TestComposeLatest:
         assert latest["runtime"]["coverage"] == 1.0
         assert "duration_seconds" in latest["runtime"]
         assert [s["symbol"] for s in latest["volume_spikes"]] == ["AAAUSDT", "CCCUSDT"]
-        assert latest["coach"]["latest_scan_at"] == now.isoformat()
-        assert latest["coach"]["new_signal_count"] == 1
-        assert len(latest["coach"]["signals"]) == 1
-        assert len(latest["coach"]["history"]) == 1
+        assert latest["choch"]["latest_scan_at"] == now.isoformat()
+        assert latest["choch"]["new_signal_count"] == 1
+        assert len(latest["choch"]["signals"]) == 1
+        assert len(latest["choch"]["history"]) == 1
 
     def test_history_bounded_to_thirty_days(self, now, state_dir):
         scan_daily(FakeClient(now, breakouts={"AAAUSDT"}), state_dir, now)
-        scan_coach(FakeClient(now, breakouts={"AAAUSDT"}), state_dir, now)
-        history = json.loads((state_dir / "coach_history.json").read_text())
+        scan_choch(FakeClient(now, breakouts={"AAAUSDT"}), state_dir, now)
+        history = json.loads((state_dir / "choch_history.json").read_text())
         history.append({**history[0], "signal_time": (now - timedelta(days=40)).isoformat()})
-        (state_dir / "coach_history.json").write_text(json.dumps(history))
+        (state_dir / "choch_history.json").write_text(json.dumps(history))
         latest = compose_latest(state_dir, now)
-        assert len(latest["coach"]["history"]) == 1
+        assert len(latest["choch"]["history"]) == 1
 
     def test_empty_state_renders_safe_defaults(self, now, state_dir):
         latest = compose_latest(state_dir, now)
         assert latest["status"] == "ok"
         assert latest["volume_spikes"] == []
-        assert latest["coach"]["signals"] == []
-        assert latest["coach"]["history"] == []
+        assert latest["choch"]["signals"] == []
+        assert latest["choch"]["history"] == []
         assert latest["data_candle_through"] is None

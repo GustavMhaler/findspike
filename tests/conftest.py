@@ -40,22 +40,31 @@ class FakeClient(BinancePublicClient):
         return out
 
     def _four_hour(self, symbol: str) -> list[Candle]:
-        breakout = symbol in self.breakouts
+        """Deterministic internal-layer bullish BOS ending on the last candle.
+
+        index 2 deep low -> leg 0->1; index 9 high 110 -> leg 1->0 (swing high
+        level); last candle close 112 crosses 110 with prev close 100 -> BOS.
+        """
+        pattern = symbol in self.breakouts
         boundary = self.now.replace(minute=0, second=0, microsecond=0)
         boundary = boundary - timedelta(hours=boundary.hour % 4)
         out = []
         for i in range(40, 0, -1):
             close_t = boundary - timedelta(hours=i - 1)
             open_t = close_t - timedelta(hours=4)
-            if breakout and i == 1:
-                open_, high, low, close = 111.0, 113.0, 110.0, 112.0
-            elif breakout and i == 2:
-                open_, high, low, close = 107.0, 109.0, 106.0, 108.0
-            elif breakout and i == 5:
-                open_, high, low, close = 105.0, 110.0, 104.0, 106.0
-            elif breakout and i in (3, 4):
-                open_, high, low, close = 104.0, 106.0, 102.0, 104.0
-            else:
-                open_, high, low, close = 101.0, 105.0, 99.0, 102.0
+            open_, high, low, close = 101.0, 105.0, 99.0, 102.0
+            if pattern:
+                if i == 1:  # index 39 — crossing close
+                    open_, high, low, close = 108.0, 115.0, 106.0, 112.0
+                elif i == 2:  # index 38 — previous close
+                    open_, high, low, close = 100.0, 104.0, 98.0, 100.0
+                elif i == 31:  # index 9 — swing high candidate
+                    open_, high, low, close = 104.0, 110.0, 102.0, 105.0
+                elif i == 34:  # index 6
+                    open_, high, low, close = 100.0, 104.0, 98.0, 101.0
+                elif i == 36:  # index 4
+                    open_, high, low, close = 100.0, 104.0, 97.0, 101.0
+                elif i == 38:  # index 2 — deep low
+                    open_, high, low, close = 95.0, 100.0, 80.0, 96.0
             out.append(Candle(open_t, close_t, open_, high, low, close, 100.0, 10000.0))
         return out

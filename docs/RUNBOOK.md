@@ -3,7 +3,7 @@
 ## Scheduled behavior
 
 - `shanzhai-daily.timer`: 06:00 Asia/Shanghai, refresh volume universe and site.
-- `shanzhai-coach.timer`: 00:05, 04:05, 08:05, 12:05, 16:05 and 20:05,
+- `shanzhai-choch.timer`: 00:05, 04:05, 08:05, 12:05, 16:05 and 20:05,
   evaluate newly closed 4h candles, rebuild, then request a digest delivery.
 - A failed build leaves `public/` untouched. The status sidecar records the
   failure for the next successful build and administrator alerting.
@@ -12,7 +12,7 @@
 
 ```bash
 python3 -m shanzhai.cli daily --output public --state state
-python3 -m shanzhai.cli coach --output public --state state
+python3 -m shanzhai.cli choch --output public --state state
 python3 -m shanzhai.cli demo --output public
 python3 -m shanzhai.cli check --output public   # exit 1 when the site or market data is stale
 ```
@@ -44,7 +44,7 @@ specific unavailable message. Do not delete D1 during rollback.
 
 ## Incident rules
 
-- Coverage below 90%, no fresh daily build by 07:00, or no Coach scan within
+- Coverage below 90%, no fresh daily build by 07:00, or no CHoCH scan within
   4h30m is an incident.
 - Data failure: retain last-known-good, retry three times with backoff, alert the
   administrator after consecutive failure.

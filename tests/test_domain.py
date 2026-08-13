@@ -2,22 +2,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from shanzhai.domain import Candle, closed_candles, latest_breakout, newest_volume_spike, pivot_highs
+from shanzhai.domain import Candle, closed_candles, newest_volume_spike
 
 UTC = timezone.utc
-
-
-def candle(open_time: datetime, high: float, close: float, volume: float = 1.0, quote: float = 1.0) -> Candle:
-    return Candle(
-        open_time=open_time,
-        close_time=open_time + timedelta(hours=4),
-        open=close - 1,
-        high=high,
-        low=min(close, high) - 1,
-        close=close,
-        volume=volume,
-        quote_volume=quote,
-    )
 
 
 def daily_candles(closes: list[float], volumes: list[float]) -> list[Candle]:
@@ -40,76 +27,42 @@ def daily_candles(closes: list[float], volumes: list[float]) -> list[Candle]:
 class TestCandle:
     def test_closed_at_excludes_open_candle(self):
         now = datetime(2026, 1, 2, 10, 0, tzinfo=UTC)
-        c = candle(datetime(2026, 1, 2, 8, 0, tzinfo=UTC), 10, 10)
+        c = Candle(
+            datetime(2026, 1, 2, 8, 0, tzinfo=UTC),
+            datetime(2026, 1, 2, 12, 0, tzinfo=UTC),
+            open=10.0, high=11.0, low=9.0, close=10.0, volume=1.0, quote_volume=1.0,
+        )
         assert c.closed_at(now) is False
 
     def test_closed_at_includes_finished_candle(self):
         now = datetime(2026, 1, 2, 12, 0, tzinfo=UTC)
-        c = candle(datetime(2026, 1, 2, 4, 0, tzinfo=UTC), 10, 10)
+        c = Candle(
+            datetime(2026, 1, 2, 4, 0, tzinfo=UTC),
+            datetime(2026, 1, 2, 8, 0, tzinfo=UTC),
+            open=10.0, high=11.0, low=9.0, close=10.0, volume=1.0, quote_volume=1.0,
+        )
         assert c.closed_at(now) is True
 
     def test_closed_candles_filters(self):
         now = datetime(2026, 1, 2, 11, 0, tzinfo=UTC)
         candles = [
-            candle(datetime(2026, 1, 2, 4, 0, tzinfo=UTC), 10, 10),
-            candle(datetime(2026, 1, 2, 8, 0, tzinfo=UTC), 10, 10),
-            candle(datetime(2026, 1, 2, 12, 0, tzinfo=UTC), 10, 10),
+            Candle(
+                datetime(2026, 1, 2, 4, 0, tzinfo=UTC),
+                datetime(2026, 1, 2, 8, 0, tzinfo=UTC),
+                open=10.0, high=11.0, low=9.0, close=10.0, volume=1.0, quote_volume=1.0,
+            ),
+            Candle(
+                datetime(2026, 1, 2, 8, 0, tzinfo=UTC),
+                datetime(2026, 1, 2, 12, 0, tzinfo=UTC),
+                open=10.0, high=11.0, low=9.0, close=10.0, volume=1.0, quote_volume=1.0,
+            ),
+            Candle(
+                datetime(2026, 1, 2, 12, 0, tzinfo=UTC),
+                datetime(2026, 1, 2, 16, 0, tzinfo=UTC),
+                open=10.0, high=11.0, low=9.0, close=10.0, volume=1.0, quote_volume=1.0,
+            ),
         ]
         assert len(closed_candles(candles, now)) == 1
-
-
-class TestPivotHighs:
-    def test_basic_pivot(self):
-        candles = [candle(datetime(2026, 1, 1, 0, 0, tzinfo=UTC) + timedelta(hours=4 * i), high=100.0, close=100.0) for i in range(10)]
-        candles[5] = candle(datetime(2026, 1, 1, 20, 0, tzinfo=UTC), high=120.0, close=100.0)
-        pivots = pivot_highs(candles)
-        assert len(pivots) == 1
-        assert pivots[0].price == 120.0
-        assert pivots[0].index == 5
-
-    def test_is_non_repainting(self):
-        candles = [candle(datetime(2026, 1, 1, 0, 0, tzinfo=UTC) + timedelta(hours=4 * i), high=100.0, close=100.0) for i in range(12)]
-        candles[5] = candle(datetime(2026, 1, 1, 20, 0, tzinfo=UTC), high=120.0, close=100.0)
-        assert pivot_highs(candles[:8]) == []  # right window not yet closed
-        assert len(pivot_highs(candles[:9])) == 1  # confirmed after 3 later candles
-
-    def test_rejects_non_positive_windows(self):
-        candles = [candle(datetime(2026, 1, 1, 0, 0, tzinfo=UTC) + timedelta(hours=4), high=100.0, close=100.0)]
-        with pytest.raises(ValueError):
-            pivot_highs(candles, left=0)
-
-
-class TestLatestBreakout:
-    def _series(self) -> list[Candle]:
-        candles = [candle(datetime(2026, 1, 1, 0, 0, tzinfo=UTC) + timedelta(hours=4 * i), high=105.0, close=102.0) for i in range(12)]
-        candles[6] = candle(datetime(2026, 1, 2, 0, 0, tzinfo=UTC), high=120.0, close=115.0)  # pivot
-        candles[10] = candle(datetime(2026, 1, 2, 16, 0, tzinfo=UTC), high=121.0, close=119.0)  # prev
-        candles[11] = candle(datetime(2026, 1, 2, 20, 0, tzinfo=UTC), high=125.0, close=125.0)  # breakout close
-        return candles
-
-    def test_signal_when_close_crosses_pivot(self):
-        signal = latest_breakout(self._series())
-        assert signal is not None
-        assert signal["pivot_price"] == 120.0
-        assert signal["close"] == 125.0
-        assert signal["previous_close"] == 119.0
-        assert signal["breakout_pct"] == pytest.approx(125.0 / 120.0 * 100 - 100)
-        assert signal["dedupe_suffix"] == "4h:" + str(int(datetime(2026, 1, 2, 0, 0, tzinfo=UTC).timestamp()))
-
-    def test_no_signal_when_close_stays_below(self):
-        candles = self._series()
-        candles[11] = candle(datetime(2026, 1, 2, 20, 0, tzinfo=UTC), high=119.0, close=118.0)
-        assert latest_breakout(candles) is None
-
-    def test_pivot_must_be_confirmed_before_signal_candle(self):
-        candles = [candle(datetime(2026, 1, 1, 0, 0, tzinfo=UTC) + timedelta(hours=4 * i), high=105.0, close=102.0) for i in range(9)]
-        candles[5] = candle(datetime(2026, 1, 1, 20, 0, tzinfo=UTC), high=120.0, close=115.0)
-        candles[8] = candle(datetime(2026, 1, 2, 8, 0, tzinfo=UTC), high=125.0, close=125.0)
-        assert latest_breakout(candles) is None  # pivot index 5 + 3 == 8 is not < 9
-
-    def test_short_series_returns_none(self):
-        candles = [candle(datetime(2026, 1, 1, 0, 0, tzinfo=UTC) + timedelta(hours=4 * i), high=105.0, close=102.0) for i in range(6)]
-        assert latest_breakout(candles) is None
 
 
 class TestNewestVolumeSpike:

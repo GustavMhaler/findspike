@@ -103,6 +103,12 @@ td.down { color: var(--down); }
 .signal:last-of-type { border-bottom: none; }
 .signal-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .signal-symbol { font-weight: 600; color: #fff; font-size: 15px; }
+.tag {
+  display: inline-block; padding: 2px 8px; border-radius: 4px;
+  font-size: 12px; font-weight: 600; line-height: 1.4;
+}
+.tag-bull { color: var(--up); border: 1px solid var(--up); }
+.tag-bear { color: var(--down); border: 1px solid var(--down); }
 .signal-time { font-size: 12px; color: var(--muted); }
 .signal-body { display: flex; gap: 20px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
 .signal-fig { min-width: 150px; }
@@ -224,7 +230,7 @@ def _spike_rows(spikes: list[dict]) -> str:
 
 def _sparkline(signal: dict) -> str:
     trace = signal.get("trace") or []
-    pivot = signal["pivot_price"]
+    pivot = signal["level"]
     width, height = 240, 48
     if len(trace) < 2:
         return ""
@@ -251,64 +257,75 @@ def _sparkline(signal: dict) -> str:
     )
 
 
+def _tag_badge(signal: dict) -> str:
+    tag = signal.get("tag", "BOS")
+    direction = signal.get("direction", "bullish")
+    css = "tag-bull" if direction == "bullish" else "tag-bear"
+    return f"<span class='tag {css}'>{html.escape(tag)}</span>"
+
+
 def _signal_cards(signals: list[dict]) -> str:
     if not signals:
-        return "<div class='empty'>No Coach breakouts in the last scan. Pivots are confirmed by the three candles that follow them, so signals appear only after confirmation.</div>"
+        return "<div class='empty'>No BOS/CHoCH in the last scan. Structure levels are confirmed by the candles that follow them, so signals appear only after confirmation.</div>"
     cards = []
     for signal in signals:
         breakout = signal["breakout_pct"]
-        direction = "up" if breakout >= 0 else "down"
+        direction = "up" if signal["direction"] == "bullish" else "down"
         cards.append(
             "<div class='signal'>"
             "<div class='signal-head'>"
             f"<span class='signal-symbol'>{html.escape(signal['symbol'])}</span>"
-            f"<span class='signal-time'>signal {_fmt_dt(signal['signal_time'])}</span>"
+            f"{_tag_badge(signal)}"
+            f"<span class='signal-time'>{html.escape(signal.get('layer', ''))} · signal {_fmt_dt(signal['signal_time'])}</span>"
             "</div>"
             f"<div class='signal-body'>"
             "<div class='signal-fig'>"
             f"<div class='fig-row'><span class='fig-label'>Close</span><span class='num'>{_fmt_price(signal['close'])}</span></div>"
-            f"<div class='fig-row'><span class='fig-label'>Pivot high</span><span class='num'>{_fmt_price(signal['pivot_price'])}</span></div>"
-            f"<div class='fig-row'><span class='fig-label'>Breakout</span><span class='num {direction}'>{_fmt_pct(breakout)}</span></div>"
+            f"<div class='fig-row'><span class='fig-label'>Structure level</span><span class='num'>{_fmt_price(signal['level'])}</span></div>"
+            f"<div class='fig-row'><span class='fig-label'>Move</span><span class='num {direction}'>{_fmt_pct(breakout)}</span></div>"
             "</div>"
             f"{_sparkline(signal)}"
             "</div>"
             "</div>"
         )
     note = (
-        "<p class='anti-repaint'>Pivot highs are confirmed only after the next three 4-hour candles close, "
-        "so this signal cannot repaint. It is research output, not investment advice.</p>"
+        "<p class='anti-repaint'>Structure bars are confirmed only after the candles that follow them close, "
+        "so these signals cannot repaint. BOS continues the run trend; CHoCH marks a change of character. "
+        "Research output, not investment advice.</p>"
     )
     return "".join(cards) + note
 
 
 def _history_rows(history: list[dict]) -> str:
     if not history:
-        return "<div class='empty'>No confirmed breakouts in the last 30 days.</div>"
+        return "<div class='empty'>No BOS/CHoCH in the last 30 days.</div>"
     rows = []
     for item in history:
         breakout = item.get("breakout_pct", 0)
-        direction = "up" if breakout >= 0 else "down"
+        direction = "up" if item.get("direction", "bullish") == "bullish" else "down"
         rows.append(
             "<tr>"
             f"<td class='num'>{_fmt_dt(item['signal_time'])}</td>"
             f"<td class='symbol'>{html.escape(item['symbol'])}</td>"
-            f"<td class='num'>{_fmt_price(item['pivot_price'])}</td>"
+            f"<td>{_tag_badge(item)}</td>"
+            f"<td class='num'>{html.escape(item.get('layer', ''))}</td>"
+            f"<td class='num'>{_fmt_price(item['level'])}</td>"
             f"<td class='num'>{_fmt_price(item['close'])}</td>"
             f"<td class='num {direction}'>{_fmt_pct(breakout)}</td>"
             "</tr>"
         )
     return (
         "<div class='scroll'><table><thead><tr>"
-        "<th>Signal Time</th><th>Symbol</th><th>Pivot</th><th>Close</th><th>Breakout</th>"
+        "<th>Signal Time</th><th>Symbol</th><th>Tag</th><th>Layer</th><th>Level</th><th>Close</th><th>Move</th>"
         "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>"
     )
 
 
 def _page_html(latest: dict, site_key: str) -> str:
     spikes = latest.get("volume_spikes", [])
-    coach = latest.get("coach", {})
-    signals = coach.get("signals", [])
-    history = coach.get("history", [])
+    choch = latest.get("choch", {})
+    signals = choch.get("signals", [])
+    history = choch.get("history", [])
     generated = latest["generated_at"]
     through = latest.get("data_candle_through")
     turnstile = site_key or ""
@@ -325,7 +342,7 @@ def _page_html(latest: dict, site_key: str) -> str:
             "</form>"
             "<div class='sub-msg' id='sub-msg' role='status' aria-live='polite'></div>"
             "<p class='sub-note'>Double opt-in with one-click unsubscribe. One digest is sent only when a new "
-            "Coach signal is confirmed; you will not get a daily email.</p>"
+            "CHoCH signal is confirmed; you will not get a daily email.</p>"
         )
     else:
         subscribe_block = (
@@ -369,20 +386,20 @@ def _page_html(latest: dict, site_key: str) -> str:
     </section>
 
     <section class="card">
-      <h2>Coach breakouts</h2>
-      <p class="sub">4h close crossing a confirmed pivot high. Last scan {_fmt_dt(coach.get('latest_scan_at') or generated)}.</p>
+      <h2>CHoCH breakouts</h2>
+      <p class="sub">Close crossing a confirmed structure level. Last scan {_fmt_dt(choch.get('latest_scan_at') or generated)}.</p>
       {_signal_cards(signals)}
     </section>
 
     <section class="card">
-      <h2>Coach history</h2>
+      <h2>CHoCH history</h2>
       <p class="sub">Confirmed breakouts from the last 30 days.</p>
       {_history_rows(history)}
     </section>
 
     <section class="card subscribe">
       <h2>Email notifications</h2>
-      <p class="sub">Get one digest when a new Coach signal is confirmed.</p>
+      <p class="sub">Get one digest when a new CHoCH signal is confirmed.</p>
       {subscribe_block}
     </section>
   </main>
@@ -393,7 +410,7 @@ def _page_html(latest: dict, site_key: str) -> str:
     <div class="footer-grid">
       <div>
         <h3>Shanzhai Signal Desk</h3>
-        <p style="margin:0;font-size:13px">Volume-spike universe and 4-hour Coach breakouts from public Binance market data.</p>
+        <p style="margin:0;font-size:13px">Volume-spike universe and 4-hour BOS/CHoCH breakouts from public Binance market data.</p>
       </div>
       <div>
         <h3>Data</h3>

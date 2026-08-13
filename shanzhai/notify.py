@@ -40,8 +40,9 @@ def build_digest_payload(signals: list[dict], scan_at: datetime) -> dict:
         "signals": [
             {
                 "symbol": s["symbol"], "key": s["key"], "close": s["close"],
-                "pivot_price": s["pivot_price"], "breakout_pct": s["breakout_pct"],
-                "signal_time": s["signal_time"],
+                "level": s["level"], "breakout_pct": s["breakout_pct"],
+                "signal_time": s["signal_time"], "tag": s["tag"],
+                "direction": s["direction"], "layer": s["layer"],
             }
             for s in signals
         ],

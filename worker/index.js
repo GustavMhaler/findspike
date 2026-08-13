@@ -155,7 +155,7 @@ async function handleSubscribe(request) {
     email,
     "Confirm your Shanzhai Signal Desk subscription",
     [
-      "Confirm your email to start receiving Coach signal digests.",
+      "Confirm your email to start receiving CHoCH signal digests.",
       "",
       confirmUrl,
       "",
@@ -191,7 +191,7 @@ async function handleConfirm(request) {
     email,
     "You are subscribed to Shanzhai Signal Desk",
     [
-      "You are subscribed. One digest will be sent only when a new Coach signal is confirmed.",
+      "You are subscribed. One digest will be sent only when a new CHoCH signal is confirmed.",
       "",
       "Unsubscribe any time:",
       `${env.BASE_URL}/api/unsubscribe?e=${encodeURIComponent(email)}&t=${await unsubscribeToken(email)}`,
@@ -265,14 +265,16 @@ async function handleDeliver(request) {
     if (!fresh.length) continue;
 
     const lines = [
-      `${fresh.length} new Coach breakout signal(s) on Shanzhai Signal Desk:`,
+      `${fresh.length} new BOS/CHoCH signal(s) on Shanzhai Signal Desk:`,
       "",
     ];
     const inserts = [];
     for (const s of fresh) {
+      const move = Number(s.breakout_pct) >= 0 ? "+" : "";
+      const direction = s.direction === "bearish" ? "break below" : "break above";
       lines.push(
-        `${s.symbol}: ${formatPrice(s.pivot_price)} pivot, close ${formatPrice(s.close)} ` +
-          `(${Number(s.breakout_pct) >= 0 ? "+" : ""}${Number(s.breakout_pct).toFixed(2)}%)`
+        `${s.symbol} [${s.tag}/${s.layer}]: close ${formatPrice(s.close)} ${direction} level ${formatPrice(s.level)} ` +
+          `(${move}${Number(s.breakout_pct).toFixed(2)}%)`
       );
       lines.push(`signal time: ${s.signal_time}`);
       lines.push("");
@@ -287,7 +289,7 @@ async function handleDeliver(request) {
     lines.push(
       `Unsubscribe: ${env.BASE_URL}/api/unsubscribe?e=${encodeURIComponent(subscriber.email)}&t=${await unsubscribeToken(subscriber.email)}`
     );
-    await sendEmail(subscriber.email, "New Coach signal — Shanzhai Signal Desk", lines.join("\n"));
+    await sendEmail(subscriber.email, "New CHoCH signal — Shanzhai Signal Desk", lines.join("\n"));
     await env.DB.batch(inserts);
     delivered += fresh.length;
   }
