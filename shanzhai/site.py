@@ -121,6 +121,10 @@ td.down { color: var(--down); }
 }
 .tag-bull { color: var(--up); border: 1px solid var(--up); }
 .tag-bear { color: var(--down); border: 1px solid var(--down); }
+.tag-mail { color: var(--primary); border: 1px solid var(--primary); }
+.tag-site { color: var(--muted); border: 1px solid var(--hairline); }
+.tag-level-small { color: #a6c8ff; border: 1px solid #a6c8ff; }
+.tag-level-major { color: #ffd166; border: 1px solid #ffd166; }
 .signal-time { font-size: 12px; color: var(--muted); }
 .signal-body { display: flex; gap: 20px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
 .signal-fig { min-width: 150px; }
@@ -131,6 +135,29 @@ td.down { color: var(--down); }
 .spark-pivot { stroke: var(--primary); stroke-width: 1; stroke-dasharray: 3 3; }
 .spark-last { fill: var(--primary); }
 .anti-repaint { margin-top: 12px; font-size: 12px; color: var(--muted); }
+
+tr[data-chart] { cursor: help; }
+.chart-pop {
+  position: fixed; z-index: 60; width: 344px; max-width: calc(100vw - 16px);
+  background: var(--surface); border: 1px solid var(--hairline); border-radius: 10px;
+  padding: 12px 14px 10px; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+  pointer-events: none; display: none;
+}
+.chart-pop.visible { display: block; }
+.chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.chart-symbol { font-weight: 600; color: #fff; font-size: 14px; }
+.chart-close { font-size: 13px; }
+.chart-close.up { color: var(--up); }
+.chart-close.down { color: var(--down); }
+.chart-sub { margin: 2px 0 8px; font-size: 11px; color: var(--muted); }
+.chart-svg { display: block; width: 100%; height: auto; }
+.chart-svg .cu { stroke: var(--up); fill: var(--up); }
+.chart-svg .cd { stroke: var(--down); fill: var(--down); }
+.chart-svg .cv-up { fill: var(--up); opacity: 0.3; }
+.chart-svg .cv-down { fill: var(--down); opacity: 0.3; }
+.chart-svg .cv-spike { fill: var(--primary); opacity: 0.85; }
+.chart-svg .spike-line { stroke: var(--primary); stroke-dasharray: 3 3; opacity: 0.8; }
+.chart-svg .axis { fill: var(--muted); font-size: 9px; font-family: var(--font-num); }
 
 .review-summary {
   display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline;
@@ -244,6 +271,7 @@ def _spike_rows(spikes: list[dict]) -> str:
     for index, spike in enumerate(spikes, 1):
         rows.append(
             "<tr"
+            " data-chart='1'"
             f" data-idx='{index - 1}'"
             f" data-symbol='{html.escape(spike['symbol'], quote=True)}'"
             f" data-date='{html.escape(spike['date'], quote=True)}'"
@@ -261,7 +289,7 @@ def _spike_rows(spikes: list[dict]) -> str:
             "</tr>"
         )
     return (
-        "<div class='scroll scroll-v'><table><thead><tr>"
+        "<div class='scroll scroll-v'><table id='spike-table'><thead><tr>"
         "<th scope='col'>#</th>"
         "<th scope='col' data-sort='symbol' data-type='s'><button type='button'>Symbol</button></th>"
         "<th scope='col' data-sort='date' data-type='s'><button type='button'>Spike Date</button></th>"
@@ -309,6 +337,15 @@ def _tag_badge(signal: dict) -> str:
     return f"<span class='tag {css}'>{html.escape(tag)}</span>"
 
 
+def _level_badge(signal: dict) -> str:
+    level_tag = signal.get("level_tag", "first")
+    if level_tag == "second":
+        label, css = "二次突破", "tag-level-major"
+    else:
+        label, css = "首次突破", "tag-level-small"
+    return f"<span class='tag {css}'>{html.escape(label)}</span>"
+
+
 def _signal_cards(signals: list[dict]) -> str:
     if not signals:
         return "<div class='empty'>No BOS/CHoCH in the last scan. Structure levels are confirmed by the candles that follow them, so signals appear only after confirmation.</div>"
@@ -316,11 +353,18 @@ def _signal_cards(signals: list[dict]) -> str:
     for signal in signals:
         breakout = signal["breakout_pct"]
         direction = "up" if signal["direction"] == "bullish" else "down"
+        tier = (
+            "<span class='tag tag-mail'>Email</span>"
+            if signal.get("email_ok")
+            else "<span class='tag tag-site'>Site</span>"
+        )
         cards.append(
             "<div class='signal'>"
             "<div class='signal-head'>"
             f"<span class='signal-symbol'>{html.escape(signal['symbol'])}</span>"
             f"{_tag_badge(signal)}"
+            f"{_level_badge(signal)}"
+            f"{tier}"
             f"<span class='signal-time'>{html.escape(signal.get('layer', ''))} · signal {_fmt_dt(signal['signal_time'])}</span>"
             "</div>"
             f"<div class='signal-body'>"
@@ -334,9 +378,9 @@ def _signal_cards(signals: list[dict]) -> str:
             "</div>"
         )
     note = (
-        "<p class='anti-repaint'>Structure bars are confirmed only after the candles that follow them close, "
-        "so these signals cannot repaint. BOS continues the run trend; CHoCH marks a change of character. "
-        "Research output, not investment advice.</p>"
+        "<p class='anti-repaint'>结构位在 1h 线上确认，15m 收盘突破后才触发，信号不会重绘。"
+        "同一币种首次突破只在网页端更新；第二次突破（二次突破）才推送邮件。"
+        "BOS 顺势延续，CHoCH 走势反转。研究输出，不构成投资建议。</p>"
     )
     return "".join(cards) + note
 
@@ -591,6 +635,8 @@ def _page_html(latest: dict, site_key: str) -> str:
 
   {subscribe_js}
 
+  {_chart_js()}
+
   function sortTable(th) {{
     var table = th.closest("table");
     var tbody = table.tBodies[0];
@@ -641,10 +687,158 @@ def _page_html(latest: dict, site_key: str) -> str:
   renderTimes();
   staleness();
   initSort();
+  initChartHover();
 }})();
 </script>
 </body>
 </html>"""
+
+
+def _chart_js() -> str:
+    return r"""
+  var CHART_W = 320, CHART_H = 170, CHART_PAD_L = 4, CHART_PAD_R = 44;
+  var pop = document.createElement("div");
+  pop.className = "chart-pop";
+  document.body.appendChild(pop);
+  var cache = {};
+  var inflight = {};
+  var current = null;
+  var spikeDate = null;
+
+  function fmtPx(v) {
+    if (v >= 1000) return v.toFixed(0);
+    if (v >= 1) return v.toFixed(2).replace(/\.?0+$/, "");
+    return v.toPrecision(3);
+  }
+  function fmtVol(v) {
+    if (v >= 1e9) return (v / 1e9).toFixed(2) + "B";
+    if (v >= 1e6) return (v / 1e6).toFixed(2) + "M";
+    if (v >= 1e3) return (v / 1e3).toFixed(2) + "K";
+    return String(Math.round(v));
+  }
+  function fmtDay(ts) {
+    var d = new Date(ts);
+    return (d.getMonth() + 1) + "/" + d.getDate();
+  }
+
+  function renderChart(symbol, payload) {
+    var candles = payload.candles || [];
+    var highs = [], lows = [];
+    var i, c;
+    for (i = 0; i < candles.length; i++) { highs.push(candles[i].h); lows.push(candles[i].l); }
+    var hi = Math.max.apply(null, highs), lo = Math.min.apply(null, lows);
+    if (!isFinite(hi) || !isFinite(lo) || hi <= lo) return;
+    var pad = (hi - lo) * 0.06;
+    hi += pad; lo -= pad;
+    var plotW = CHART_W - CHART_PAD_R - CHART_PAD_L;
+    var volH = 30, priceH = CHART_H - 14 - volH;
+    var step = plotW / candles.length, bw = Math.max(1, step * 0.62);
+    function py(v) { return (hi - v) / (hi - lo) * priceH + 2; }
+    var maxVol = 0;
+    for (i = 0; i < candles.length; i++) { if (candles[i].v > maxVol) maxVol = candles[i].v; }
+    var last = candles[candles.length - 1];
+    var chg = (last.c - candles[0].c) / candles[0].c * 100;
+    var svg = ["<svg class='chart-svg' viewBox='0 0 " + CHART_W + " " + CHART_H + "'>"];
+    var firstSpikeDay = null;
+    for (i = 0; i < candles.length; i++) {
+      var day = new Date(candles[i].t).toISOString().slice(0, 10);
+      if (!firstSpikeDay && day >= spikeDate) firstSpikeDay = i;
+    }
+    var x, cls, body, top, bot, yO, yC, volH2;
+    for (i = 0; i < candles.length; i++) {
+      c = candles[i];
+      x = CHART_PAD_L + i * step + (step - bw) / 2;
+      cls = c.c >= c.o ? "cu" : "cd";
+      yO = py(c.o); yC = py(c.c);
+      body = "<rect class='" + cls + "' x='" + x.toFixed(1) + "' y='" + Math.min(yO, yC).toFixed(1) +
+        "' width='" + bw.toFixed(1) + "' height='" + Math.max(1, Math.abs(yC - yO)).toFixed(1) + "'/>";
+      top = py(c.h); bot = py(c.l);
+      body += "<line class='" + cls + "' x1='" + (x + bw / 2).toFixed(1) + "' y1='" + top.toFixed(1) +
+        "' x2='" + (x + bw / 2).toFixed(1) + "' y2='" + bot.toFixed(1) + "' stroke-width='1'/>";
+      volH2 = maxVol > 0 ? c.v / maxVol * volH : 0;
+      var vcls = i === firstSpikeDay ? "cv-spike" : (c.c >= c.o ? "cv-up" : "cv-down");
+      body += "<rect class='" + vcls + "' x='" + x.toFixed(1) + "' y='" + (CHART_H - volH2).toFixed(1) +
+        "' width='" + bw.toFixed(1) + "' height='" + volH2.toFixed(1) + "'/>";
+      svg.push(body);
+    }
+    if (firstSpikeDay !== null) {
+      var lx = CHART_PAD_L + firstSpikeDay * step + step / 2;
+      svg.push("<line class='spike-line' x1='" + lx.toFixed(1) + "' y1='2' x2='" + lx.toFixed(1) + "' y2='" + (CHART_H - 14) + "'/>");
+    }
+    var yTicks = [hi - pad, (hi + lo) / 2, lo + pad];
+    for (i = 0; i < yTicks.length; i++) {
+      svg.push("<text class='axis' x='" + (CHART_W - CHART_PAD_R + 4) + "' y='" + (py(yTicks[i]) + 3).toFixed(1) + "'>" + fmtPx(yTicks[i]) + "</text>");
+    }
+    svg.push("<text class='axis' x='" + CHART_PAD_L + "' y='" + (CHART_H - 3) + "'>" + fmtDay(candles[0].t) + "</text>");
+    svg.push("<text class='axis' x='" + (CHART_W - CHART_PAD_R - 30) + "' y='" + (CHART_H - 3) + "' text-anchor='end'>" + fmtDay(last.t) + "</text>");
+    svg.push("</svg>");
+    var color = chg >= 0 ? "up" : "down";
+    var closeRow = "<span class='chart-close " + color + " num'>" + fmtPx(last.c) + " (" + (chg >= 0 ? "+" : "") + chg.toFixed(1) + "%)</span>";
+    var head = "<div class='chart-head'><span class='chart-symbol'>" + symbol +
+      "</span><span class='chart-sub num'>" + candles.length + "d · " + payload.updated_at.slice(0, 10) + "</span></div>" +
+      "<div class='chart-sub'>close " + closeRow + " · vol " + fmtVol(last.q) + " USDT</div>";
+    pop.innerHTML = head + svg.join("");
+    pop.classList.add("visible");
+  }
+
+  function showChart(row) {
+    var symbol = row.getAttribute("data-symbol");
+    spikeDate = row.getAttribute("data-date");
+    current = symbol;
+    if (cache[symbol]) { renderChart(symbol, cache[symbol]); return; }
+    pop.innerHTML = "<div class='chart-head'><span class='chart-symbol'>" + symbol + "</span></div><div class='chart-sub'>loading…</div>";
+    pop.classList.add("visible");
+    if (inflight[symbol]) return;
+    inflight[symbol] = true;
+    fetch("charts/" + symbol + ".json")
+      .then(function (r) { if (!r.ok) throw new Error("http " + r.status); return r.json(); })
+      .then(function (payload) {
+        cache[symbol] = payload;
+        if (current === symbol) renderChart(symbol, payload);
+      })
+      .catch(function () {
+        if (current === symbol) {
+          pop.innerHTML = "<div class='chart-head'><span class='chart-symbol'>" + symbol + "</span></div><div class='chart-sub'>chart unavailable</div>";
+        }
+      })
+      .then(function () { inflight[symbol] = false; });
+  }
+
+  function hideChart() { current = null; pop.classList.remove("visible"); }
+
+  function placePop(rect) {
+    var w = pop.offsetWidth, h = pop.offsetHeight;
+    var top = rect.top !== undefined ? rect.top : 0;
+    var left = rect.left !== undefined ? rect.left : 0;
+    var px = left + 18, py = top - h - 10;
+    if (py < 8) py = top + 26;
+    if (px + w > window.innerWidth - 8) px = window.innerWidth - w - 8;
+    if (px < 8) px = 8;
+    if (py + h > window.innerHeight - 8) py = window.innerHeight - h - 8;
+    pop.style.left = px + "px";
+    pop.style.top = py + "px";
+  }
+
+  function initChartHover() {
+    var table = document.getElementById("spike-table");
+    if (!table) return;
+    table.addEventListener("mouseover", function (e) {
+      var row = e.target.closest("tr[data-chart]");
+      if (!row) return;
+      var rect = row.getBoundingClientRect();
+      showChart(row);
+      placePop({ top: rect.top, left: rect.left });
+    });
+    table.addEventListener("mouseout", function (e) {
+      if (e.target.closest("tr[data-chart]")) hideChart();
+    });
+    table.addEventListener("mousemove", function (e) {
+      if (!pop.classList.contains("visible")) return;
+      if (!e.target.closest("tr[data-chart]")) return;
+      placePop({ top: e.clientY - 20, left: e.clientX });
+    });
+  }
+"""
 
 
 def _subscribe_js(turnstile_sitekey: str) -> str:
@@ -706,7 +900,18 @@ def _status_json(latest: dict) -> dict:
     }
 
 
-def build_site(output: Path, latest: dict, site_key: str = "") -> Path:
+def _copy_charts(source: Path, target: Path) -> int:
+    if not source.is_dir():
+        return 0
+    target.mkdir(parents=True, exist_ok=True)
+    count = 0
+    for path in sorted(source.glob("*.json")):
+        (target / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        count += 1
+    return count
+
+
+def build_site(output: Path, latest: dict, site_key: str = "", charts_dir: Path | None = None) -> Path:
     """Atomically replace `output` with a fresh build; keep the previous on failure."""
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -724,6 +929,8 @@ def build_site(output: Path, latest: dict, site_key: str = "") -> Path:
         (staging / "status.json").write_text(
             json.dumps(_status_json(latest), ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        if charts_dir is not None:
+            _copy_charts(Path(charts_dir), staging / "charts")
     except Exception:
         shutil.rmtree(staging, ignore_errors=True)
         raise

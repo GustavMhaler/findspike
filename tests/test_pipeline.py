@@ -47,23 +47,36 @@ class TestScanCoach:
         self._seed_daily(state_dir, now)
         client = FakeClient(now, breakouts={"AAAUSDT"})
         result = scan_choch(client, state_dir, now)
-        assert result["new_signal_count"] == 1
-        signal = result["signals"][0]
-        assert signal["symbol"] == "AAAUSDT"
-        assert signal["notify"] is True
-        assert signal["key"].startswith("AAAUSDT:swing:BOS:")
-        assert len(signal["trace"]) == 40
+        assert result["new_signal_count"] == 2
+        signals = result["signals"]
+        assert [s["symbol"] for s in signals] == ["AAAUSDT", "AAAUSDT"]
+        assert [s["level_tag"] for s in signals] == ["first", "second"]
+        assert [s["email_ok"] for s in signals] == [False, True]
+        assert [s["notify"] for s in signals] == [False, True]
+        assert all(s["key"].startswith("AAAUSDT:swing:BOS:") for s in signals)
+        assert len(signals[0]["trace"]) == 40
         assert result["data_candle_through"] is not None
+
+    def test_second_breakout_crosses_digest_window(self, now, state_dir):
+        """A second breakout older than the notify freshness window still gets
+        email_ok (it is a 二次突破) but is not marked for immediate notify."""
+        self._seed_daily(state_dir, now)
+        client = FakeClient(now, breakouts={"AAAUSDT"})
+        result = scan_choch(client, state_dir, now, seed=True)
+        signals = result["signals"]
+        assert [s["level_tag"] for s in signals] == ["first", "second"]
+        assert [s["email_ok"] for s in signals] == [False, True]
+        assert all(s["notify"] is False for s in signals)
 
     def test_idempotent_second_scan_sends_nothing(self, now, state_dir):
         self._seed_daily(state_dir, now)
         client = FakeClient(now, breakouts={"AAAUSDT"})
         first = scan_choch(client, state_dir, now)
-        assert first["new_signal_count"] == 1
+        assert first["new_signal_count"] == 2
         second = scan_choch(client, state_dir, now)
         assert second["new_signal_count"] == 0
         history = json.loads((state_dir / "choch_history.json").read_text())
-        assert len(history) == 1
+        assert len(history) == 2
 
     def test_watch_pool_coverage_gate(self, now, state_dir):
         self._seed_daily(state_dir, now)
@@ -81,8 +94,8 @@ class TestScanCoach:
         self._seed_daily(state_dir, now)
         client = FakeClient(now, breakouts={"AAAUSDT"})
         result = scan_choch(client, state_dir, now, seed=True)
-        assert result["new_signal_count"] == 1
-        assert result["signals"][0]["notify"] is False
+        assert result["new_signal_count"] == 2
+        assert all(s["notify"] is False for s in result["signals"])
         assert result["notify_count"] == 0
 
     def test_watch_pool_respects_watch_until(self, now, state_dir):
@@ -103,22 +116,25 @@ class TestScanCoach:
 
     def test_rederived_duplicate_absorbed_not_reemitted(self, now, state_dir):
         """A structure re-derived with a drifted structure_time (new key but
-        same symbol/layer/tag/signal_time) must not be emitted again."""
+        same symbol/layer/tag/level_tag/signal_time) must not be emitted again."""
         self._seed_daily(state_dir, now)
         client = FakeClient(now, breakouts={"AAAUSDT"})
         first = scan_choch(client, state_dir, now)
-        real_key = first["signals"][0]["key"]
-        event = first["signals"][0]
+        real_keys = [s["key"] for s in first["signals"]]
+        events = first["signals"]
         (state_dir / "choch_keys.json").write_text(json.dumps(["AAAUSDT:swing:BOS:9999999999"]))
-        (state_dir / "choch_history.json").write_text(
-            json.dumps([{**event, "structure_time": "2026-08-01T00:00:00+00:00", "key": "AAAUSDT:swing:BOS:9999999999"}])
-        )
+        rewritten = []
+        for i, event in enumerate(events):
+            rewritten.append(
+                {**event, "structure_time": f"2026-08-0{i+1}T00:00:00+00:00", "key": f"AAAUSDT:swing:BOS:999999999{i}"}
+            )
+        (state_dir / "choch_history.json").write_text(json.dumps(rewritten))
         second = scan_choch(client, state_dir, now)
         assert second["new_signal_count"] == 0
         keys = json.loads((state_dir / "choch_keys.json").read_text())
-        assert real_key in keys
+        assert all(k in keys for k in real_keys)
         history = json.loads((state_dir / "choch_history.json").read_text())
-        assert len(history) == 1
+        assert len(history) == 2
 
 
 class TestComposeLatest:
@@ -127,7 +143,7 @@ class TestComposeLatest:
         scan_choch(FakeClient(now, breakouts={"AAAUSDT"}), state_dir, now)
         latest = compose_latest(state_dir, now)
         assert latest["schema_version"] == 2
-        assert latest["algorithm_version"] == "volume-spike-v2+smc-swing50-internal5-bos-choch-1h-v1"
+        assert latest["algorithm_version"] == "volume-spike-v2+smc-ht1h-lt15m-first-second-v1"
         assert latest["status"] == "ok"
         assert latest["timezone"] == "Asia/Shanghai"
         assert latest["generated_at"] == now.isoformat()
@@ -136,9 +152,9 @@ class TestComposeLatest:
         assert "duration_seconds" in latest["runtime"]
         assert [s["symbol"] for s in latest["volume_spikes"]] == ["AAAUSDT", "CCCUSDT"]
         assert latest["choch"]["latest_scan_at"] == now.isoformat()
-        assert latest["choch"]["new_signal_count"] == 1
-        assert len(latest["choch"]["signals"]) == 1
-        assert len(latest["choch"]["history"]) == 1
+        assert latest["choch"]["new_signal_count"] == 2
+        assert len(latest["choch"]["signals"]) == 2
+        assert len(latest["choch"]["history"]) == 2
 
     def test_history_bounded_to_thirty_days(self, now, state_dir):
         scan_daily(FakeClient(now, breakouts={"AAAUSDT"}), state_dir, now)
@@ -147,7 +163,7 @@ class TestComposeLatest:
         history.append({**history[0], "signal_time": (now - timedelta(days=40)).isoformat()})
         (state_dir / "choch_history.json").write_text(json.dumps(history))
         latest = compose_latest(state_dir, now)
-        assert len(latest["choch"]["history"]) == 1
+        assert len(latest["choch"]["history"]) == 2
 
     def test_empty_state_renders_safe_defaults(self, now, state_dir):
         latest = compose_latest(state_dir, now)

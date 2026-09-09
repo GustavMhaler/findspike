@@ -21,8 +21,16 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from .binance_api import BinancePublicClient
+from .charts import spike_symbols, update_charts
 from .domain import Candle, UTC
-from .notify import build_admin_alert_payload, build_digest_payload, request_delivery
+from .io_utils import read_json
+from .notify import (
+    build_admin_alert_payload,
+    build_digest_payload,
+    collect_digest,
+    digest_due,
+    request_delivery,
+)
 from .pipeline import compose_latest, read_status_sidecar, scan_choch, scan_daily, write_status_sidecar
 from .review import call_llm, evaluate_pending, llm_config
 from .site import build_site
@@ -30,9 +38,11 @@ from .site import build_site
 ALERT_AFTER_CONSECUTIVE_FAILURES = 3
 DAILY_STALE_AFTER = timedelta(hours=26)
 COACH_STALE_AFTER = timedelta(hours=2)
+DIGEST_HOUR_DEFAULT = 8  # Asia/Shanghai: one merged digest per day
 
 ENV_WORKER_URL = "WORKER_URL"
 ENV_DIGEST_SECRET = "DIGEST_SECRET"
+ENV_DIGEST_HOUR = "DIGEST_HOUR"
 ENV_TURNSTILE_SITEKEY = "TURNSTILE_SITEKEY"
 ENV_BINANCE_BASE_URL = "BINANCE_BASE_URL"
 
@@ -51,6 +61,8 @@ def _record_success(status: dict, command: str, state: Path, now: datetime) -> d
     status["last_error"] = None
     if command == "daily":
         status["last_daily_success"] = now.isoformat()
+    elif command == "charts":
+        status["last_charts_success"] = now.isoformat()
     else:
         status["last_choch_success"] = now.isoformat()
     status["last_build"] = now.isoformat()
@@ -91,17 +103,58 @@ def _maybe_admin_alert(state: Path, command: str, message: str) -> None:
     print(f"admin alert: {summary}", file=sys.stderr)
 
 
+def _digest_hour() -> int:
+    raw = os.environ.get(ENV_DIGEST_HOUR, "").strip()
+    try:
+        return int(raw) if raw else DIGEST_HOUR_DEFAULT
+    except ValueError:
+        return DIGEST_HOUR_DEFAULT
+
+
+def _deliver_digest(state: Path, now: datetime) -> dict:
+    """Deliver the merged daily digest when the scan lands in the digest slot.
+
+    Reads the latest history from state, selects email-eligible signals since
+    the previous digest (with per-symbol cooldown), and only advances
+    ``last_digest_at`` on a successful send so a failed delivery is retried on
+    the next run.
+    """
+    status = read_status_sidecar(state)
+    last_digest_at = status.get("last_digest_at")
+    last_digest_at = datetime.fromisoformat(last_digest_at) if last_digest_at else None
+    history = read_json(state / "choch_history.json", [])
+    signals = collect_digest(history, last_digest_at, now)
+    if not signals:
+        return {"sent": False, "error": "no new email-eligible signals"}
+    summary = _deliver(state, build_digest_payload(signals, now))
+    if summary.get("sent"):
+        status = read_status_sidecar(state)
+        status["last_digest_at"] = now.isoformat()
+        write_status_sidecar(state, status)
+    return summary
+
+
+def _charts_dir(state: Path) -> Path:
+    return state / "charts"
+
+
 def cmd_daily(args: argparse.Namespace) -> int:
     now = datetime.now(UTC)
     state = Path(args.state)
     try:
-        result = scan_daily(_client(), state, now, workers=args.workers)
+        client = _client()
+        result = scan_daily(client, state, now, workers=args.workers)
+        chart_summary = update_charts(
+            client, spike_symbols(result), state, now, workers=args.workers
+        )
         latest = compose_latest(state, now)
-        build_site(Path(args.output), latest, site_key=_site_key())
+        build_site(Path(args.output), latest, site_key=_site_key(), charts_dir=_charts_dir(state))
         _record_success(read_status_sidecar(state), "daily", state, now)
         print(
             f"daily ok: {result['coverage']:.1%} coverage, "
-            f"{len(result['spikes'])} spikes in {result['duration_seconds']}s"
+            f"{len(result['spikes'])} spikes in {result['duration_seconds']}s; "
+            f"charts {chart_summary['succeeded']}/{chart_summary['symbols']} "
+            f"({len(chart_summary['failures'])} failed) in {chart_summary['duration_seconds']}s"
         )
         return 0
     except Exception as exc:
@@ -117,14 +170,14 @@ def cmd_choch(args: argparse.Namespace) -> int:
     try:
         result = scan_choch(_client(), state, now, seed=args.seed, workers=args.workers)
         latest = compose_latest(state, now)
-        build_site(Path(args.output), latest, site_key=_site_key())
+        build_site(Path(args.output), latest, site_key=_site_key(), charts_dir=_charts_dir(state))
         _record_success(read_status_sidecar(state), "choch", state, now)
         print(
             f"choch ok: {result['watch_count']} watched, {result['new_signal_count']} new, "
-            f"{result['notify_count']} to notify in {result['duration_seconds']}s"
+            f"{result['notify_count']} notify in {result['duration_seconds']}s"
         )
-        if not args.seed and result["notify_count"]:
-            summary = _deliver(state, build_digest_payload(result["signals"], now))
+        if not args.seed and digest_due(now, _digest_hour()):
+            summary = _deliver_digest(state, now)
             print(f"digest delivery: {summary}")
         return 0
     except Exception as exc:
@@ -149,11 +202,33 @@ def cmd_review(args: argparse.Namespace) -> int:
         )
         if summary["evaluated"]:
             latest = compose_latest(state, now)
-            build_site(Path(args.output), latest, site_key=_site_key())
+            build_site(Path(args.output), latest, site_key=_site_key(), charts_dir=_charts_dir(state))
             print(f"site rebuilt with {summary['evaluated']} new reviews")
         return 0
     except Exception as exc:
         print(f"review failed: {exc}", file=sys.stderr)
+        return 1
+
+
+def cmd_charts(args: argparse.Namespace) -> int:
+    """Refresh daily chart payloads for the current spike symbols and republish."""
+    now = datetime.now(UTC)
+    state = Path(args.state)
+    try:
+        daily = read_json(state / "daily.json", {})
+        symbols = spike_symbols(daily)
+        summary = update_charts(_client(), symbols, state, now, workers=args.workers)
+        latest = compose_latest(state, now)
+        build_site(Path(args.output), latest, site_key=_site_key(), charts_dir=_charts_dir(state))
+        _record_success(read_status_sidecar(state), "charts", state, now)
+        print(
+            f"charts ok: {summary['succeeded']}/{summary['symbols']} updated, "
+            f"{len(summary['failures'])} failed in {summary['duration_seconds']}s"
+        )
+        return 0
+    except Exception as exc:
+        _record_failure(read_status_sidecar(state), "charts", state, now, str(exc))
+        print(f"charts failed: {exc}", file=sys.stderr)
         return 1
 
 
@@ -162,10 +237,11 @@ def cmd_demo(args: argparse.Namespace) -> int:
     state = Path(args.state)
     state.mkdir(parents=True, exist_ok=True)
     client = _DemoClient(now)
-    scan_daily(client, state, now, workers=args.workers)
+    result = scan_daily(client, state, now, workers=args.workers)
+    update_charts(client, spike_symbols(result), state, now, workers=args.workers)
     scan_choch(client, state, now, seed=True, workers=args.workers)
     latest = compose_latest(state, now)
-    build_site(Path(args.output), latest, site_key=_site_key())
+    build_site(Path(args.output), latest, site_key=_site_key(), charts_dir=_charts_dir(state))
     print(f"demo ok: site built at {args.output}")
     return 0
 
@@ -212,6 +288,12 @@ def main(argv: list[str] | None = None) -> int:
     p_review.add_argument("--state", default="state")
     p_review.set_defaults(func=cmd_review)
 
+    p_charts = sub.add_parser("charts", help="refresh daily chart payloads for spike symbols and republish")
+    p_charts.add_argument("--output", default="public")
+    p_charts.add_argument("--state", default="state")
+    p_charts.add_argument("--workers", type=int, default=6)
+    p_charts.set_defaults(func=cmd_charts)
+
     p_demo = sub.add_parser("demo", help="build a sample site from synthetic data")
     p_demo.add_argument("--output", default="public")
     p_demo.add_argument("--state", default="state")
@@ -241,6 +323,10 @@ class _DemoClient(BinancePublicClient):
     ) -> list[Candle]:
         if interval == "1d":
             return self._daily(symbol)
+        if interval == "4h":
+            return self._ht4h(symbol)
+        if interval == "15m":
+            return self._lt15m(symbol)
         return self._hourly(symbol)
 
     def _daily(self, symbol: str) -> list[Candle]:
@@ -260,12 +346,54 @@ class _DemoClient(BinancePublicClient):
             )
         return candles
 
-    def _hourly(self, symbol: str) -> list[Candle]:
-        """Deterministic swing-layer bullish BOS ending on the last candle.
+    def _ht4h(self, symbol: str) -> list[Candle]:
+        """Deterministic 4h structure: a pivot high of 110 flanked by lower
+        highs so pivot size 3 confirms it, leaving the level actionable.
+        """
+        pattern = symbol == "FLATUSDT"
+        boundary = self.now.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
+        candles = []
+        for i in range(80, 0, -1):
+            close_t = boundary - timedelta(hours=4 * (i - 1))
+            open_t = close_t - timedelta(hours=4)
+            open_, high, low, close, volume = 101.0, 104.0, 98.0, 102.0, 100.0
+            if pattern and i == 40:  # pivot high candidate (110), flanked by lower highs
+                open_, high, low, close = 105.0, 110.0, 100.0, 106.0
+            candles.append(
+                Candle(open_t, close_t, open_, high, low, close, volume=volume, quote_volume=volume * 100.0)
+            )
+        return candles
 
-        Swing size 50: index 5 deep low -> leg 0->1 (confirmed at i=55);
-        index 15 high 110 -> leg 1->0 (confirmed at i=65); last candle close
-        112 crosses 110 with prev close 100 -> swing BOS.
+    def _lt15m(self, symbol: str) -> list[Candle]:
+        """Deterministic 15m trigger window: closes 100 until two crossing
+        candles — one closes 112 (first breakout of 110) and the last closes
+        118 (second breakout / 二次突破 of the upgraded 115 level).
+        """
+        pattern = symbol == "FLATUSDT"
+        boundary = self.now.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
+        candles = []
+        for i in range(1000, 0, -1):
+            close_t = boundary - timedelta(minutes=15 * (i - 1))
+            open_t = close_t - timedelta(minutes=15)
+            open_, high, low, close, volume = 100.0, 104.0, 98.0, 100.0, 100.0
+            if pattern:
+                if i == 201:  # index 799 — crosses 110 (first breakout)
+                    open_, high, low, close, volume = 108.0, 115.0, 106.0, 112.0, 250.0
+                elif i == 21:  # index 979 — crosses 115 (second breakout)
+                    open_, high, low, close, volume = 114.0, 120.0, 112.0, 118.0, 250.0
+            candles.append(
+                Candle(open_t, close_t, open_, high, low, close, volume=volume, quote_volume=volume * 100.0)
+            )
+        return candles
+
+    def _hourly(self, symbol: str) -> list[Candle]:
+        """Deterministic 1h series used by the review module's 24h measurement
+        and as the 1h structure feed.
+
+        Two right-confirmed pivot highs: 110 at index 15 and a higher 115 at
+        index 60. The 115 upgrades the active level once it confirms, so the 15m
+        trigger series (above) fires a first breakout at 110 and a second
+        (二次突破) at 115.
         """
         pattern = symbol == "FLATUSDT"
         boundary = self.now.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
@@ -273,22 +401,16 @@ class _DemoClient(BinancePublicClient):
         for i in range(80, 0, -1):
             close_t = boundary - timedelta(hours=i - 1)
             open_t = close_t - timedelta(hours=1)
-            open_, high, low, close = 101.0, 105.0, 99.0, 102.0
+            open_, high, low, close, volume = 101.0, 105.0, 99.0, 102.0, 100.0
             if pattern:
-                if i == 1:  # index 79 — crossing close
-                    open_, high, low, close = 108.0, 115.0, 106.0, 112.0
-                elif i == 2:  # index 78 — previous close
-                    open_, high, low, close = 100.0, 104.0, 98.0, 100.0
-                elif i == 65:  # index 15 — swing high candidate
+                if i == 65:  # index 15 — 1h pivot high (110)
                     open_, high, low, close = 104.0, 110.0, 102.0, 105.0
-                elif i == 60:  # index 20
-                    open_, high, low, close = 100.0, 104.0, 98.0, 101.0
-                elif i == 55:  # index 25
-                    open_, high, low, close = 100.0, 104.0, 97.0, 101.0
+                elif i == 20:  # index 60 — higher pivot high (115)
+                    open_, high, low, close = 109.0, 115.0, 107.0, 110.0
                 elif i == 75:  # index 5 — deep low
                     open_, high, low, close = 95.0, 100.0, 80.0, 96.0
             candles.append(
-                Candle(open_t, close_t, open_, high, low, close, volume=100.0, quote_volume=10000.0)
+                Candle(open_t, close_t, open_, high, low, close, volume=volume, quote_volume=volume * 100.0)
             )
         return candles
 

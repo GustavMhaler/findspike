@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -23,8 +23,9 @@ def test_demo_builds_deterministic_site(tmp_path):
     latest = json.loads((output / "data" / "latest.json").read_text())
     symbols = [s["symbol"] for s in latest["volume_spikes"]]
     assert "SPKUSDT" in symbols
-    assert [s["symbol"] for s in latest["choch"]["signals"]] == ["FLATUSDT"]
-    assert latest["choch"]["history"][0]["symbol"] == "FLATUSDT"
+    assert [s["symbol"] for s in latest["choch"]["signals"]] == ["FLATUSDT", "FLATUSDT"]
+    assert [s["level_tag"] for s in latest["choch"]["signals"]] == ["first", "second"]
+    assert all(s["symbol"] == "FLATUSDT" for s in latest["choch"]["history"])
     html = (output / "index.html").read_text()
     assert "FLATUSDT" in html and "spark-pivot" in html
 
@@ -36,12 +37,26 @@ def test_daily_and_choch_end_to_end(tmp_path, fake_client):
     assert cli.main(["choch", "--output", str(output), "--state", str(state)]) == 0
     latest = json.loads((output / "data" / "latest.json").read_text())
     assert latest["runtime"]["coverage"] == 1.0
-    assert latest["choch"]["new_signal_count"] == 1
-    assert latest["choch"]["signals"][0]["symbol"] == "AAAUSDT"
+    assert latest["choch"]["new_signal_count"] == 2
+    assert all(s["symbol"] == "AAAUSDT" for s in latest["choch"]["signals"])
     status = json.loads((state / "status.json").read_text())
     assert status["consecutive_failures"] == 0
     assert status["last_daily_success"] is not None
     assert status["last_choch_success"] is not None
+    chart = json.loads((output / "charts" / "AAAUSDT.json").read_text())
+    assert chart["symbol"] == "AAAUSDT" and chart["candles"]
+
+
+def test_charts_command_updates_payloads_and_republishes(tmp_path, fake_client):
+    output = tmp_path / "public"
+    state = tmp_path / "state"
+    assert cli.main(["daily", "--output", str(output), "--state", str(state)]) == 0
+    (state / "charts" / "AAAUSDT.json").unlink()
+    assert cli.main(["charts", "--output", str(output), "--state", str(state)]) == 0
+    chart = json.loads((output / "charts" / "AAAUSDT.json").read_text())
+    assert chart["symbol"] == "AAAUSDT" and chart["candles"]
+    status = json.loads((state / "status.json").read_text())
+    assert status["last_charts_success"] is not None
 
 
 def test_second_choch_run_is_idempotent(tmp_path, fake_client):
@@ -52,7 +67,7 @@ def test_second_choch_run_is_idempotent(tmp_path, fake_client):
     assert cli.main(["choch", "--output", str(output), "--state", str(state)]) == 0
     latest = json.loads((output / "data" / "latest.json").read_text())
     assert latest["choch"]["new_signal_count"] == 0
-    assert len(latest["choch"]["history"]) == 1
+    assert len(latest["choch"]["history"]) == 2
 
 
 def test_digest_skipped_without_secret(tmp_path, fake_client, monkeypatch):
@@ -60,6 +75,7 @@ def test_digest_skipped_without_secret(tmp_path, fake_client, monkeypatch):
     state = tmp_path / "state"
     monkeypatch.delenv("DIGEST_SECRET", raising=False)
     monkeypatch.setenv("WORKER_URL", "https://worker.test")
+    monkeypatch.setenv("DIGEST_HOUR", str(datetime.now(UTC).astimezone(timezone(timedelta(hours=8))).hour))
     cli.main(["daily", "--output", str(output), "--state", str(state)])
     assert cli.main(["choch", "--output", str(output), "--state", str(state)]) == 0
     status = json.loads((state / "status.json").read_text())

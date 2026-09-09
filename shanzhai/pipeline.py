@@ -9,14 +9,72 @@ from .binance_api import BinancePublicClient
 from .domain import closed_candles, newest_volume_spike
 from .io_utils import read_json, write_json
 from .review import compose_reviews
-from .smc import scan_smc
+from .smc import scan_ht_lt
 
-ALGORITHM_VERSION = "volume-spike-v2+smc-swing50-internal5-bos-choch-1h-v1"
+ALGORITHM_VERSION = "volume-spike-v2+smc-ht1h-lt15m-first-second-v1"
 
 # Only swing-layer signals are emitted (page, history, email, reviews).
-# Internal-layer signals were too noisy; smc.py still computes them but the
-# pipeline drops them here.
 EMITTED_LAYERS = ("swing",)
+
+# Single-layer structure + low-timeframe trigger, following the LuxAlgo
+# CHoCH/BOS semantics from docs/choch:
+#   structure = 1h pivot levels (right-confirmed, size HT_STRUCTURE_SIZE)
+#   lt        = 15m close crossing the active level
+# A symbol's FIRST bullish breakout in the recent window only updates the
+# website; the SECOND one is emailed and tagged "二次突破".
+STRUCTURE_INTERVAL = "1h"
+STRUCTURE_LIMIT = 300
+LT_INTERVAL = "15m"
+LT_LIMIT = 1000
+
+# A bullish breakout is a "二次突破" (second breakout) when the same symbol
+# already had a bullish breakout within this window. The first one only updates
+# the website; the second one is emailed.
+SECOND_BREAKOUT_WINDOW = timedelta(days=3)
+
+
+def _tag_breakout_order(
+    history: list[dict],
+    signals: list[dict],
+    now: datetime,
+    seed: bool = False,
+) -> None:
+    """Tag each signal as first/second breakout per symbol, in place.
+
+    For every bullish signal, count how many bullish signals the same symbol
+    already has within ``SECOND_BREAKOUT_WINDOW`` (prior history plus earlier
+    signals of this batch). The first one is ``level_tag="first"`` (website
+    only, ``email_ok=False``); the second and later are ``level_tag="second"``
+    (二次突破, ``email_ok=True``). Bearish signals never get emailed.
+    """
+    window_start = now - SECOND_BREAKOUT_WINDOW
+    prior: dict[str, int] = {}
+    for item in history:
+        if item.get("direction") != "bullish":
+            continue
+        try:
+            signal_time = datetime.fromisoformat(item["signal_time"])
+        except (KeyError, ValueError):
+            continue
+        if window_start <= signal_time <= now:
+            prior[item["symbol"]] = prior.get(item["symbol"], 0) + 1
+
+    ordered = sorted(signals, key=lambda s: s["signal_time"])
+    for signal in ordered:
+        if signal.get("direction") != "bullish":
+            signal["level_tag"] = "first"
+            signal["email_ok"] = False
+            signal["notify"] = False
+            continue
+        prior[signal["symbol"]] = prior.get(signal["symbol"], 0) + 1
+        ordinal = prior[signal["symbol"]]
+        signal["level_tag"] = "second" if ordinal >= 2 else "first"
+        signal["email_ok"] = ordinal >= 2
+        signal["notify"] = (
+            not seed
+            and signal["email_ok"]
+            and now - datetime.fromisoformat(signal["signal_time"]) <= timedelta(hours=24)
+        )
 
 
 def _read_json(path: Path, fallback):
@@ -72,8 +130,9 @@ def scan_choch(client: BinancePublicClient, state_dir: Path, now: datetime, seed
     failures: list[dict] = []
 
     def scan(item: dict):
-        candles = closed_candles(client.candles(item["symbol"], "1h", 300), now)
-        events = [e for e in scan_smc(candles) if e.layer in EMITTED_LAYERS]
+        structure = closed_candles(client.candles(item["symbol"], STRUCTURE_INTERVAL, STRUCTURE_LIMIT), now)
+        lt = closed_candles(client.candles(item["symbol"], LT_INTERVAL, LT_LIMIT), now)
+        events = [e for e in scan_ht_lt(structure, lt) if e.layer in EMITTED_LAYERS]
         result = []
         for event in events:
             key = f'{item["symbol"]}:{event.key}'
@@ -85,17 +144,19 @@ def scan_choch(client: BinancePublicClient, state_dir: Path, now: datetime, seed
                     "signal_time": event.signal_time.isoformat(),
                     "structure_time": event.structure_time.isoformat(),
                     "breakout_pct": round(event.breakout_pct, 4),
-                    "trace": [round(c.close, 8) for c in candles[-40:]],
+                    "level_tag": event.level_tag,
+                    "trace": [round(c.close, 8) for c in lt[-40:]],
                     "key": key,
                 }
             )
-        return result, candles
+        return result, lt
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         jobs = {executor.submit(scan, item): item["symbol"] for item in active}
         # (symbol, layer, tag, signal_time) identifies one event; structure_time
         # drifts by a candle or two as candles accumulate, so compare without it
-        # to swallow re-derived duplicates instead of re-emitting them.
+        # to swallow re-derived duplicates. level_tag is derived (first/second
+        # breakout) and must not participate in the identity key.
         seen_events = {(h["symbol"], h["layer"], h["tag"], h["signal_time"]) for h in history}
         through = None
         for job in as_completed(jobs):
@@ -110,11 +171,12 @@ def scan_choch(client: BinancePublicClient, state_dir: Path, now: datetime, seed
                             sent.add(signal["key"])
                             continue
                         seen_events.add(event_sig)
-                        signal["notify"] = not seed and now - datetime.fromisoformat(signal["signal_time"]) <= timedelta(hours=24)
                         signals.append(signal)
                         sent.add(signal["key"])
             except Exception as exc:
                 failures.append({"symbol": jobs[job], "error": f"{type(exc).__name__}: {str(exc)[:120]}"})
+
+    _tag_breakout_order(history, signals, now, seed=seed)
 
     coverage = (len(active) - len(failures)) / len(active) if active else 1.0
     if coverage < 0.9:

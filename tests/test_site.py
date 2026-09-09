@@ -109,3 +109,33 @@ def test_escaping_of_malicious_symbol(tmp_path):
     html = (output / "index.html").read_text()
     assert "<img src=x" not in html
     assert "&lt;img" in html
+
+
+def test_hover_chart_tokens_present(tmp_path):
+    output = tmp_path / "public"
+    build_site(output, LATEST)
+    html = (output / "index.html").read_text()
+    assert "data-chart='1'" in html
+    assert "id='spike-table'" in html
+    assert "initChartHover" in html
+    assert "chart-pop" in html and "chart-svg" in html
+    assert 'fetch("charts/" + symbol + ".json")' in html
+
+
+def test_charts_copied_into_site(tmp_path):
+    charts_dir = tmp_path / "state" / "charts"
+    charts_dir.mkdir(parents=True)
+    (charts_dir / "SPKUSDT.json").write_text(json.dumps({"symbol": "SPKUSDT", "candles": []}))
+    (charts_dir / "note.txt").write_text("ignored")
+    output = tmp_path / "public"
+    build_site(output, LATEST, charts_dir=charts_dir)
+    assert (output / "charts" / "SPKUSDT.json").is_file()
+    payload = json.loads((output / "charts" / "SPKUSDT.json").read_text())
+    assert payload["symbol"] == "SPKUSDT"
+    assert not (output / "charts" / "note.txt").exists()
+
+
+def test_charts_dir_absent_when_not_provided(tmp_path):
+    output = tmp_path / "public"
+    build_site(output, LATEST)
+    assert not (output / "charts").exists()

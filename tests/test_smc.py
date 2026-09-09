@@ -3,7 +3,14 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from shanzhai.domain import Candle
-from shanzhai.smc import BOS, CHOCH, scan_smc
+from shanzhai.smc import (
+    BOS,
+    CHOCH,
+    SmcEvent,
+    quality_ok,
+    scan_ht_lt,
+    scan_smc,
+)
 
 UTC = timezone.utc
 
@@ -103,3 +110,125 @@ class TestSmcStructure:
     def test_flat_series_no_events(self):
         candles = base_series(80, datetime(2026, 1, 1, 0, 0, tzinfo=UTC))
         assert scan_smc(candles) == []
+
+
+class TestQualityGate:
+    def _event(self, **overrides) -> SmcEvent:
+        event = SmcEvent(
+            layer="swing", tag=BOS, direction="bullish",
+            level=110.0, close=113.0, previous_close=105.0,
+            signal_time=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+            structure_time=datetime(2025, 12, 1, 0, 0, tzinfo=UTC),
+            bias_before=0, breakout_pct=2.727,
+            candle_open=112.0, candle_volume=300.0, avg_volume=100.0,
+        )
+        for key, value in overrides.items():
+            setattr(event, key, value)
+        return event
+
+    def test_strong_crossing_passes(self):
+        assert quality_ok(self._event())
+
+    def test_tiny_breakout_fails_min_breakout(self):
+        assert not quality_ok(self._event(breakout_pct=0.5))
+
+    def test_wick_only_body_fails_confirm(self):
+        """A large body that straddles the level fails even with a fat breakout."""
+        assert not quality_ok(self._event(candle_open=105.0, close=113.0, level=110.0, breakout_pct=2.727))
+        # majority beyond the level passes
+        assert quality_ok(self._event(candle_open=109.0, close=113.0, level=110.0))
+
+    def test_bearish_body_confirm(self):
+        event = self._event(
+            direction="bearish", close=107.0, level=110.0, candle_open=109.0,
+            breakout_pct=2.803,
+        )
+        assert quality_ok(event)
+        assert not quality_ok(self._event(
+            direction="bearish", close=106.0, level=110.0, candle_open=115.0,
+            breakout_pct=3.774,
+        ))
+
+    def test_no_volume_expansion_fails(self):
+        assert not quality_ok(self._event(candle_volume=100.0, avg_volume=100.0))
+
+    def test_disabled_volume_mult_skips_volume_check(self):
+        assert quality_ok(self._event(candle_volume=100.0, avg_volume=100.0), volume_mult=0.0)
+
+    def test_smc_events_carry_quality_metadata(self):
+        """scan_smc populates candle_open/volume/avg_volume so the pipeline gate works."""
+        candles = series_with_bos()
+        event = scan_smc(candles)[0]
+        assert event.candle_open == 108.0
+        assert event.candle_volume == 100.0
+        assert event.avg_volume == pytest.approx(100.0)
+
+
+class TestHtLtScan:
+    def _hourly_structure(self):
+        """1h series: pivot high 110 at index 20 (right-confirmed by 3 candles)."""
+        start = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+        candles = base_series(160, start)
+        candles[20] = candle(candles[20].open_time, 104.0, 110.0, 102.0, 105.0)
+        return candles
+
+    def _lt_trigger(self):
+        """15m series: closes 100 until the last candle closes 112 (crosses 110)."""
+        start = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+        candles = base_series(200, start, open_p=100.0, high=104.0, low=98.0, close=100.0)
+        candles[-1] = candle(candles[-1].open_time, 108.0, 115.0, 106.0, 112.0)
+        return candles
+
+    def test_bullish_breakout_on_lt_close(self):
+        events = scan_ht_lt(self._hourly_structure(), self._lt_trigger(), size=3)
+        bullish = [e for e in events if e.direction == "bullish"]
+        assert len(bullish) == 1
+        assert bullish[0].level == 110.0
+        assert bullish[0].close == 112.0
+        assert bullish[0].tag == BOS
+        assert bullish[0].layer == "swing"
+
+    def test_bearish_breakout_on_lt_close(self):
+        candles = self._hourly_structure()
+        # deep low pivot at index 30, then a 15m close below it
+        candles[30] = candle(candles[30].open_time, 101.0, 103.0, 95.0, 102.0)
+        lt = self._lt_trigger()
+        lt[-1] = candle(lt[-1].open_time, 100.0, 102.0, 88.0, 92.0)
+        events = scan_ht_lt(candles, lt, size=3)
+        bearish = [e for e in events if e.direction == "bearish"]
+        assert bearish and bearish[0].level == 95.0
+        assert bearish[0].close == 92.0
+        assert bearish[0].tag == BOS
+
+    def test_structure_upgrade_to_higher_high(self):
+        """A later higher pivot upgrades the level; a fresh crossing fires a new event."""
+        candles = self._hourly_structure()
+        candles[60] = candle(candles[60].open_time, 124.0, 130.0, 122.0, 125.0)
+        # first crossing of 110 before the 130 pivot confirms, then price
+        # settles above and later crosses the upgraded 130 level
+        start = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+        lt = base_series(200, start, open_p=100.0, high=104.0, low=98.0, close=100.0)
+        lt[40] = candle(lt[40].open_time, 108.0, 115.0, 106.0, 112.0)
+        lt[-1] = candle(lt[-1].open_time, 128.0, 135.0, 126.0, 132.0)
+        events = scan_ht_lt(candles, lt, size=3)
+        bullish = sorted([e for e in events if e.direction == "bullish"], key=lambda e: e.signal_time)
+        assert [e.level for e in bullish] == [110.0, 130.0]
+
+    def test_fires_once_per_level(self):
+        candles = self._hourly_structure()
+        start = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+        lt = base_series(200, start, open_p=100.0, high=104.0, low=98.0, close=100.0)
+        lt[-2] = candle(lt[-2].open_time, 108.0, 115.0, 106.0, 112.0)
+        lt[-1] = candle(lt[-1].open_time, 112.0, 118.0, 110.0, 116.0)
+        bullish = [e for e in scan_ht_lt(candles, lt, size=3) if e.direction == "bullish"]
+        assert len(bullish) == 1
+
+    def test_no_structure_no_events(self):
+        start = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+        flat = base_series(160, start)
+        assert scan_ht_lt(flat, self._lt_trigger(), size=3) == []
+
+    def test_default_size_is_ht_structure_size(self):
+        from shanzhai.smc import HT_STRUCTURE_SIZE
+
+        assert HT_STRUCTURE_SIZE == 5

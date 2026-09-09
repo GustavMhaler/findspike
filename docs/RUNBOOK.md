@@ -3,8 +3,13 @@
 ## Scheduled behavior
 
 - `shanzhai-daily.timer`: 06:00 Asia/Shanghai, refresh volume universe and site.
+  The daily run also refreshes the hover-chart payloads (`state/charts/` →
+  `public/charts/`) for the current spike symbols; chart fetch failures never
+  fail the daily scan.
 - `shanzhai-choch.timer`: 00:05, 04:05, 08:05, 12:05, 16:05 and 20:05,
-  evaluate newly closed 1h candles, rebuild, then request a digest delivery.
+  evaluate newly closed 1h candles and rebuild. Digest delivery happens only on
+  the scan that lands in the `DIGEST_HOUR` slot (default 08:05); other scans
+  accumulate email-eligible signals silently.
 - A failed build leaves `public/` untouched. The status sidecar records the
   failure for the next successful build and administrator alerting.
 
@@ -12,6 +17,7 @@
 
 ```bash
 python3 -m shanzhai.cli daily --output public --state state
+python3 -m shanzhai.cli charts --output public --state state
 python3 -m shanzhai.cli choch --output public --state state
 python3 -m shanzhai.cli choch --output public --state state
 python3 -m shanzhai.cli review --output public --state state

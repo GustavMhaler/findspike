@@ -307,13 +307,14 @@ function digestText(signals, unsubscribeUrl) {
     const arrow = s.direction === "bullish" ? "▲" : "▼";
     const verb = s.direction === "bullish" ? "突破" : "跌破";
     const move = (Number(s.breakout_pct) >= 0 ? "+" : "") + Number(s.breakout_pct).toFixed(2) + "%";
-    lines.push(`${arrow} ${s.symbol} ${verb} ${formatPrice(s.level)}，收 ${formatPrice(s.close)}（${move}）`);
+    const level = s.level_tag === "second" ? "二次突破" : "首次突破";
+    lines.push(`${arrow} ${s.symbol} ${verb} ${formatPrice(s.level)}（${level}），收 ${formatPrice(s.close)}（${move}）`);
     lines.push(`   时间：${beijingTime(s.signal_time)}`);
     lines.push("");
   }
   lines.push(`${env.BASE_URL}（查看图表）`);
   lines.push("");
-  lines.push("BOS = 顺势延续，CHoCH = 走势反转。");
+  lines.push("二次突破 = 同一币种第 2 次突破 1h 结构位。BOS = 顺势延续，CHoCH = 走势反转。");
   lines.push(`退订：${unsubscribeUrl}`);
   return lines.join("\n");
 }
@@ -328,10 +329,12 @@ function digestHtml(signals, unsubscribeUrl) {
       const arrow = bullish ? "▲" : "▼";
       const verb = bullish ? "突破" : "跌破";
       const move = (Number(s.breakout_pct) >= 0 ? "+" : "") + Number(s.breakout_pct).toFixed(2) + "%";
+      const level = s.level_tag === "second" ? "二次突破" : "首次突破";
       return `<tr>
         <td style="padding:9px 12px;border-bottom:1px solid #eceff3;font-weight:600;white-space:nowrap">${escHtml(s.symbol)}</td>
         <td style="padding:9px 12px;border-bottom:1px solid #eceff3;color:${color};white-space:nowrap">${arrow} ${bullish ? "看涨" : "看跌"}</td>
         <td style="padding:9px 12px;border-bottom:1px solid #eceff3;white-space:nowrap">${escHtml(s.tag)}</td>
+        <td style="padding:9px 12px;border-bottom:1px solid #eceff3;white-space:nowrap">${escHtml(level)}</td>
         <td style="padding:9px 12px;border-bottom:1px solid #eceff3;white-space:nowrap">${verb} <b>${formatPrice(s.level)}</b></td>
         <td style="padding:9px 12px;border-bottom:1px solid #eceff3;white-space:nowrap">${formatPrice(s.close)}</td>
         <td style="padding:9px 12px;border-bottom:1px solid #eceff3;color:${color};white-space:nowrap">${move}</td>
@@ -352,6 +355,7 @@ function digestHtml(signals, unsubscribeUrl) {
         <th style="text-align:left;padding:9px 12px">币种</th>
         <th style="text-align:left;padding:9px 12px">方向</th>
         <th style="text-align:left;padding:9px 12px">类型</th>
+        <th style="text-align:left;padding:9px 12px">级别</th>
         <th style="text-align:left;padding:9px 12px">价位</th>
         <th style="text-align:left;padding:9px 12px">收盘</th>
         <th style="text-align:left;padding:9px 12px">幅度</th>
