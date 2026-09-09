@@ -44,7 +44,7 @@ def test_daily_and_choch_end_to_end(tmp_path, fake_client):
     assert status["last_daily_success"] is not None
     assert status["last_choch_success"] is not None
     chart = json.loads((output / "charts" / "AAAUSDT.json").read_text())
-    assert chart["symbol"] == "AAAUSDT" and chart["candles"]
+    assert chart["symbol"] == "AAAUSDT" and chart["intervals"]["1d"]["candles"]
 
 
 def test_charts_command_updates_payloads_and_republishes(tmp_path, fake_client):
@@ -54,7 +54,7 @@ def test_charts_command_updates_payloads_and_republishes(tmp_path, fake_client):
     (state / "charts" / "AAAUSDT.json").unlink()
     assert cli.main(["charts", "--output", str(output), "--state", str(state)]) == 0
     chart = json.loads((output / "charts" / "AAAUSDT.json").read_text())
-    assert chart["symbol"] == "AAAUSDT" and chart["candles"]
+    assert chart["symbol"] == "AAAUSDT" and chart["intervals"]["1d"]["candles"]
     status = json.loads((state / "status.json").read_text())
     assert status["last_charts_success"] is not None
 

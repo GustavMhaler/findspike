@@ -111,14 +111,15 @@ def test_escaping_of_malicious_symbol(tmp_path):
     assert "&lt;img" in html
 
 
-def test_hover_chart_tokens_present(tmp_path):
+def test_chart_card_tokens_present(tmp_path):
     output = tmp_path / "public"
     build_site(output, LATEST)
     html = (output / "index.html").read_text()
     assert "data-chart='1'" in html
     assert "id='spike-table'" in html
-    assert "initChartHover" in html
-    assert "chart-pop" in html and "chart-svg" in html
+    assert "initChartCard" in html
+    assert "chart-modal" in html and "chart-card" in html and "chart-svg" in html
+    assert "chart-tab" in html
     assert 'fetch("charts/" + symbol + ".json")' in html
 
 

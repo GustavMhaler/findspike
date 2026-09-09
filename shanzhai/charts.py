@@ -1,10 +1,12 @@
-"""Daily candlestick chart payloads for the volume-spike hover preview.
+"""Candlestick chart payloads for the volume-spike chart card.
 
 Charts are fetched once per day alongside the daily scan and stored under
 ``state/charts/<SYMBOL>.json``; every site build copies them into
 ``public/charts/`` so the page can lazy-load them when a spike symbol is
-hovered. Chart payloads are auxiliary: per-symbol failures never fail the
-daily scan, and candles are closed-only (anti-repaint by design).
+clicked. Each payload carries a daily and an hourly candle set so the card
+can switch intervals without another fetch. Chart payloads are auxiliary:
+per-symbol failures never fail the daily scan, and candles are closed-only
+(anti-repaint by design).
 """
 
 from __future__ import annotations
@@ -15,35 +17,44 @@ from datetime import datetime
 from pathlib import Path
 
 from .binance_api import BinancePublicClient
-from .domain import UTC, closed_candles
+from .domain import UTC, Candle, closed_candles
 from .io_utils import write_json
 
-CHART_INTERVAL = "1d"
-CHART_CANDLES = 90
+CHART_SETS = {"1d": 90, "1h": 120}
 
 
 def chart_path(state_dir: Path, symbol: str) -> Path:
     return Path(state_dir) / "charts" / f"{symbol}.json"
 
 
+def _candle_dicts(candles: list[Candle]) -> list[dict]:
+    return [
+        {
+            "t": int(c.open_time.timestamp() * 1000),
+            "o": round(c.open, 8),
+            "h": round(c.high, 8),
+            "l": round(c.low, 8),
+            "c": round(c.close, 8),
+            "v": round(c.volume, 8),
+            "q": round(c.quote_volume, 8),
+        }
+        for c in candles
+    ]
+
+
 def fetch_chart(client: BinancePublicClient, symbol: str, now: datetime) -> dict:
-    candles = closed_candles(client.candles(symbol, CHART_INTERVAL, CHART_CANDLES), now)
     return {
         "symbol": symbol,
-        "interval": CHART_INTERVAL,
         "updated_at": now.astimezone(UTC).isoformat(),
-        "candles": [
-            {
-                "t": int(c.open_time.timestamp() * 1000),
-                "o": round(c.open, 8),
-                "h": round(c.high, 8),
-                "l": round(c.low, 8),
-                "c": round(c.close, 8),
-                "v": round(c.volume, 8),
-                "q": round(c.quote_volume, 8),
+        "intervals": {
+            interval: {
+                "interval": interval,
+                "candles": _candle_dicts(
+                    closed_candles(client.candles(symbol, interval, limit), now)
+                ),
             }
-            for c in candles
-        ],
+            for interval, limit in CHART_SETS.items()
+        },
     }
 
 
@@ -69,7 +80,7 @@ def update_charts(
             symbol = jobs[job]
             try:
                 payload = job.result()
-                if payload["candles"]:
+                if any(iv["candles"] for iv in payload["intervals"].values()):
                     write_json(chart_path(state_dir, symbol), payload)
                     succeeded += 1
                 else:

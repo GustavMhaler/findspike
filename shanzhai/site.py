@@ -136,28 +136,47 @@ td.down { color: var(--down); }
 .spark-last { fill: var(--primary); }
 .anti-repaint { margin-top: 12px; font-size: 12px; color: var(--muted); }
 
-tr[data-chart] { cursor: help; }
-.chart-pop {
-  position: fixed; z-index: 60; width: 344px; max-width: calc(100vw - 16px);
-  background: var(--surface); border: 1px solid var(--hairline); border-radius: 10px;
-  padding: 12px 14px 10px; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
-  pointer-events: none; display: none;
+tr[data-chart] { cursor: pointer; }
+.chart-modal {
+  display: none; position: fixed; inset: 0; z-index: 60;
+  background: rgba(0, 0, 0, 0.55); padding: 24px;
 }
-.chart-pop.visible { display: block; }
-.chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.chart-symbol { font-weight: 600; color: #fff; font-size: 14px; }
-.chart-close { font-size: 13px; }
-.chart-close.up { color: var(--up); }
-.chart-close.down { color: var(--down); }
-.chart-sub { margin: 2px 0 8px; font-size: 11px; color: var(--muted); }
+.chart-modal.visible { display: flex; align-items: center; justify-content: center; }
+.chart-card {
+  width: min(860px, 100%); max-height: 94vh; overflow: auto;
+  background: var(--surface); border: 1px solid var(--hairline); border-radius: 14px;
+  padding: 18px 20px 14px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+}
+.chart-head { display: flex; align-items: center; gap: 12px; }
+.chart-symbol { font-weight: 600; color: #fff; font-size: 16px; }
+.chart-tabs { display: flex; gap: 6px; margin-left: auto; }
+.chart-tab {
+  border: 1px solid var(--hairline); background: transparent; color: var(--muted);
+  font: inherit; font-size: 12px; padding: 4px 12px; border-radius: 999px; cursor: pointer;
+}
+.chart-tab:hover { color: var(--body); }
+.chart-tab.active {
+  background: var(--primary); border-color: var(--primary);
+  color: var(--on-primary); font-weight: 600;
+}
+.chart-x {
+  border: none; background: transparent; color: var(--muted);
+  font-size: 16px; line-height: 1; cursor: pointer; padding: 4px 6px;
+}
+.chart-x:hover { color: #fff; }
+.chart-sub { margin: 8px 0 4px; font-size: 12px; color: var(--muted); }
+.chart-sub .up { color: var(--up); }
+.chart-sub .down { color: var(--down); }
+.chart-body { margin-top: 4px; }
 .chart-svg { display: block; width: 100%; height: auto; }
+.chart-svg .grid { stroke: var(--hairline); }
 .chart-svg .cu { stroke: var(--up); fill: var(--up); }
 .chart-svg .cd { stroke: var(--down); fill: var(--down); }
 .chart-svg .cv-up { fill: var(--up); opacity: 0.3; }
 .chart-svg .cv-down { fill: var(--down); opacity: 0.3; }
 .chart-svg .cv-spike { fill: var(--primary); opacity: 0.85; }
-.chart-svg .spike-line { stroke: var(--primary); stroke-dasharray: 3 3; opacity: 0.8; }
-.chart-svg .axis { fill: var(--muted); font-size: 9px; font-family: var(--font-num); }
+.chart-svg .spike-line { stroke: var(--primary); stroke-dasharray: 4 4; opacity: 0.8; }
+.chart-svg .axis { fill: var(--muted); font-size: 12px; font-family: var(--font-num); }
 
 .review-summary {
   display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline;
@@ -541,7 +560,7 @@ def _page_html(latest: dict, site_key: str) -> str:
     <div class="col">
       <section class="card">
         <h2>Volume spikes</h2>
-        <p class="sub">Newest closed daily candle within the last 10, base volume at least 5x its preceding 7-candle average.</p>
+        <p class="sub">Newest closed daily candle within the last 10, base volume at least 5x its preceding 7-candle average. Click a row for the daily / hourly chart.</p>
         {_spike_rows(spikes)}
       </section>
 
@@ -687,7 +706,7 @@ def _page_html(latest: dict, site_key: str) -> str:
   renderTimes();
   staleness();
   initSort();
-  initChartHover();
+  initChartCard();
 }})();
 </script>
 </body>
@@ -696,14 +715,19 @@ def _page_html(latest: dict, site_key: str) -> str:
 
 def _chart_js() -> str:
     return r"""
-  var CHART_W = 320, CHART_H = 170, CHART_PAD_L = 4, CHART_PAD_R = 44;
-  var pop = document.createElement("div");
-  pop.className = "chart-pop";
-  document.body.appendChild(pop);
+  var CHART_W = 760, CHART_H = 380, CHART_PAD_L = 8, CHART_PAD_R = 62;
+  var CHART_SETS = { daily: "1d", hourly: "1h" };
+  var modal = document.createElement("div");
+  modal.className = "chart-modal";
+  modal.innerHTML = "<div class='chart-card' role='dialog' aria-modal='true'></div>";
+  document.body.appendChild(modal);
+  var card = modal.firstChild;
   var cache = {};
   var inflight = {};
   var current = null;
+  var currentTab = "daily";
   var spikeDate = null;
+  var lastFocus = null;
 
   function fmtPx(v) {
     if (v >= 1000) return v.toFixed(0);
@@ -720,9 +744,23 @@ def _chart_js() -> str:
     var d = new Date(ts);
     return (d.getMonth() + 1) + "/" + d.getDate();
   }
+  function fmtHour(ts) {
+    var d = new Date(ts);
+    return (d.getMonth() + 1) + "/" + d.getDate() + " " + d.getHours() + ":00";
+  }
+
+  function isSpikeDay(candle) {
+    if (!spikeDate) return false;
+    return new Date(candle.t).toISOString().slice(0, 10) === spikeDate;
+  }
 
   function renderChart(symbol, payload) {
-    var candles = payload.candles || [];
+    var set = payload.intervals && payload.intervals[CHART_SETS[currentTab]];
+    var candles = (set && set.candles) || [];
+    if (!candles.length) {
+      card.innerHTML = "<div class='chart-head'><span class='chart-symbol'>" + symbol + "</span><button class='chart-x' type='button' aria-label='Close'>&times;</button></div><div class='chart-sub'>no candles for this interval</div>";
+      return;
+    }
     var highs = [], lows = [];
     var i, c;
     for (i = 0; i < candles.length; i++) { highs.push(candles[i].h); lows.push(candles[i].l); }
@@ -731,18 +769,18 @@ def _chart_js() -> str:
     var pad = (hi - lo) * 0.06;
     hi += pad; lo -= pad;
     var plotW = CHART_W - CHART_PAD_R - CHART_PAD_L;
-    var volH = 30, priceH = CHART_H - 14 - volH;
+    var volH = 60, priceH = CHART_H - 18 - volH;
     var step = plotW / candles.length, bw = Math.max(1, step * 0.62);
-    function py(v) { return (hi - v) / (hi - lo) * priceH + 2; }
+    function py(v) { return (hi - v) / (hi - lo) * priceH + 4; }
     var maxVol = 0;
     for (i = 0; i < candles.length; i++) { if (candles[i].v > maxVol) maxVol = candles[i].v; }
     var last = candles[candles.length - 1];
     var chg = (last.c - candles[0].c) / candles[0].c * 100;
     var svg = ["<svg class='chart-svg' viewBox='0 0 " + CHART_W + " " + CHART_H + "'>"];
-    var firstSpikeDay = null;
+    svg.push("<line class='grid' x1='" + CHART_PAD_L + "' y1='" + (priceH / 2 + 2).toFixed(1) + "' x2='" + (CHART_W - CHART_PAD_R) + "' y2='" + (priceH / 2 + 2).toFixed(1) + "'/>");
+    var firstSpike = null;
     for (i = 0; i < candles.length; i++) {
-      var day = new Date(candles[i].t).toISOString().slice(0, 10);
-      if (!firstSpikeDay && day >= spikeDate) firstSpikeDay = i;
+      if (isSpikeDay(candles[i])) { firstSpike = i; break; }
     }
     var x, cls, body, top, bot, yO, yC, volH2;
     for (i = 0; i < candles.length; i++) {
@@ -756,38 +794,44 @@ def _chart_js() -> str:
       body += "<line class='" + cls + "' x1='" + (x + bw / 2).toFixed(1) + "' y1='" + top.toFixed(1) +
         "' x2='" + (x + bw / 2).toFixed(1) + "' y2='" + bot.toFixed(1) + "' stroke-width='1'/>";
       volH2 = maxVol > 0 ? c.v / maxVol * volH : 0;
-      var vcls = i === firstSpikeDay ? "cv-spike" : (c.c >= c.o ? "cv-up" : "cv-down");
-      body += "<rect class='" + vcls + "' x='" + x.toFixed(1) + "' y='" + (CHART_H - volH2).toFixed(1) +
+      var vcls = isSpikeDay(c) ? "cv-spike" : (c.c >= c.o ? "cv-up" : "cv-down");
+      body += "<rect class='" + vcls + "' x='" + x.toFixed(1) + "' y='" + (priceH + 10 + (volH - volH2)).toFixed(1) +
         "' width='" + bw.toFixed(1) + "' height='" + volH2.toFixed(1) + "'/>";
       svg.push(body);
     }
-    if (firstSpikeDay !== null) {
-      var lx = CHART_PAD_L + firstSpikeDay * step + step / 2;
-      svg.push("<line class='spike-line' x1='" + lx.toFixed(1) + "' y1='2' x2='" + lx.toFixed(1) + "' y2='" + (CHART_H - 14) + "'/>");
+    if (firstSpike !== null) {
+      var lx = CHART_PAD_L + firstSpike * step + step / 2;
+      svg.push("<line class='spike-line' x1='" + lx.toFixed(1) + "' y1='2' x2='" + lx.toFixed(1) + "' y2='" + (priceH + 8) + "'/>");
     }
     var yTicks = [hi - pad, (hi + lo) / 2, lo + pad];
     for (i = 0; i < yTicks.length; i++) {
-      svg.push("<text class='axis' x='" + (CHART_W - CHART_PAD_R + 4) + "' y='" + (py(yTicks[i]) + 3).toFixed(1) + "'>" + fmtPx(yTicks[i]) + "</text>");
+      svg.push("<text class='axis' x='" + (CHART_W - CHART_PAD_R + 6) + "' y='" + (py(yTicks[i]) + 4).toFixed(1) + "'>" + fmtPx(yTicks[i]) + "</text>");
     }
-    svg.push("<text class='axis' x='" + CHART_PAD_L + "' y='" + (CHART_H - 3) + "'>" + fmtDay(candles[0].t) + "</text>");
-    svg.push("<text class='axis' x='" + (CHART_W - CHART_PAD_R - 30) + "' y='" + (CHART_H - 3) + "' text-anchor='end'>" + fmtDay(last.t) + "</text>");
+    var fmtT = currentTab === "hourly" ? fmtHour : fmtDay;
+    svg.push("<text class='axis' x='" + CHART_PAD_L + "' y='" + (CHART_H - 4) + "'>" + fmtT(candles[0].t) + "</text>");
+    svg.push("<text class='axis' x='" + (CHART_W - CHART_PAD_R) + "' y='" + (CHART_H - 4) + "' text-anchor='end'>" + fmtT(last.t) + "</text>");
     svg.push("</svg>");
     var color = chg >= 0 ? "up" : "down";
-    var closeRow = "<span class='chart-close " + color + " num'>" + fmtPx(last.c) + " (" + (chg >= 0 ? "+" : "") + chg.toFixed(1) + "%)</span>";
-    var head = "<div class='chart-head'><span class='chart-symbol'>" + symbol +
-      "</span><span class='chart-sub num'>" + candles.length + "d · " + payload.updated_at.slice(0, 10) + "</span></div>" +
-      "<div class='chart-sub'>close " + closeRow + " · vol " + fmtVol(last.q) + " USDT</div>";
-    pop.innerHTML = head + svg.join("");
-    pop.classList.add("visible");
+    var chgTxt = (chg >= 0 ? "+" : "") + chg.toFixed(1) + "%";
+    var intervalLabel = currentTab === "hourly" ? "1h" : "1d";
+    var tabHtml = "";
+    for (var key in CHART_SETS) {
+      tabHtml += "<button class='chart-tab" + (key === currentTab ? " active" : "") +
+        "' type='button' data-tab='" + key + "'>" + CHART_SETS[key] + "</button>";
+    }
+    card.innerHTML =
+      "<div class='chart-head'><span class='chart-symbol'>" + symbol + "</span>" +
+      "<div class='chart-tabs'>" + tabHtml + "</div>" +
+      "<button class='chart-x' type='button' aria-label='Close'>&times;</button></div>" +
+      "<div class='chart-sub num'>" + candles.length + " " + intervalLabel + " candles · close " +
+      "<span class='" + color + "'>" + fmtPx(last.c) + " (" + chgTxt + ")</span> · vol " + fmtVol(last.q) + " USDT</div>" +
+      "<div class='chart-body'>" + svg.join("") + "</div>";
   }
 
-  function showChart(row) {
-    var symbol = row.getAttribute("data-symbol");
-    spikeDate = row.getAttribute("data-date");
+  function openCard(symbol) {
     current = symbol;
     if (cache[symbol]) { renderChart(symbol, cache[symbol]); return; }
-    pop.innerHTML = "<div class='chart-head'><span class='chart-symbol'>" + symbol + "</span></div><div class='chart-sub'>loading…</div>";
-    pop.classList.add("visible");
+    card.innerHTML = "<div class='chart-head'><span class='chart-symbol'>" + symbol + "</span><button class='chart-x' type='button' aria-label='Close'>&times;</button></div><div class='chart-sub'>loading…</div>";
     if (inflight[symbol]) return;
     inflight[symbol] = true;
     fetch("charts/" + symbol + ".json")
@@ -798,45 +842,44 @@ def _chart_js() -> str:
       })
       .catch(function () {
         if (current === symbol) {
-          pop.innerHTML = "<div class='chart-head'><span class='chart-symbol'>" + symbol + "</span></div><div class='chart-sub'>chart unavailable</div>";
+          card.innerHTML = "<div class='chart-head'><span class='chart-symbol'>" + symbol + "</span><button class='chart-x' type='button' aria-label='Close'>&times;</button></div><div class='chart-sub'>chart unavailable</div>";
         }
       })
       .then(function () { inflight[symbol] = false; });
   }
 
-  function hideChart() { current = null; pop.classList.remove("visible"); }
-
-  function placePop(rect) {
-    var w = pop.offsetWidth, h = pop.offsetHeight;
-    var top = rect.top !== undefined ? rect.top : 0;
-    var left = rect.left !== undefined ? rect.left : 0;
-    var px = left + 18, py = top - h - 10;
-    if (py < 8) py = top + 26;
-    if (px + w > window.innerWidth - 8) px = window.innerWidth - w - 8;
-    if (px < 8) px = 8;
-    if (py + h > window.innerHeight - 8) py = window.innerHeight - h - 8;
-    pop.style.left = px + "px";
-    pop.style.top = py + "px";
+  function closeCard() {
+    current = null;
+    modal.classList.remove("visible");
+    document.removeEventListener("keydown", onKey);
+    if (lastFocus) { lastFocus.focus(); lastFocus = null; }
   }
 
-  function initChartHover() {
+  function onKey(e) {
+    if (e.key === "Escape") closeCard();
+  }
+
+  function initChartCard() {
     var table = document.getElementById("spike-table");
     if (!table) return;
-    table.addEventListener("mouseover", function (e) {
+    table.addEventListener("click", function (e) {
       var row = e.target.closest("tr[data-chart]");
       if (!row) return;
-      var rect = row.getBoundingClientRect();
-      showChart(row);
-      placePop({ top: rect.top, left: rect.left });
+      lastFocus = document.activeElement;
+      spikeDate = row.getAttribute("data-date");
+      currentTab = "daily";
+      modal.classList.add("visible");
+      openCard(row.getAttribute("data-symbol"));
     });
-    table.addEventListener("mouseout", function (e) {
-      if (e.target.closest("tr[data-chart]")) hideChart();
+    modal.addEventListener("click", function (e) {
+      if (e.target.closest(".chart-x") || !e.target.closest(".chart-card")) closeCard();
+      var tab = e.target.closest(".chart-tab");
+      if (tab && current) {
+        currentTab = tab.getAttribute("data-tab");
+        renderChart(current, cache[current]);
+      }
     });
-    table.addEventListener("mousemove", function (e) {
-      if (!pop.classList.contains("visible")) return;
-      if (!e.target.closest("tr[data-chart]")) return;
-      placePop({ top: e.clientY - 20, left: e.clientX });
-    });
+    document.addEventListener("keydown", onKey);
   }
 """
 

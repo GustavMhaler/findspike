@@ -13,16 +13,19 @@ class TestFetchChart:
         client = FakeClient(NOW, breakouts=set())
         payload = fetch_chart(client, "AAAUSDT", NOW)
         assert payload["symbol"] == "AAAUSDT"
-        assert payload["interval"] == "1d"
         assert payload["updated_at"] == NOW.isoformat()
-        candles = payload["candles"]
-        assert 1 <= len(candles) <= 90
-        for candle in candles:
-            assert set(candle) == {"t", "o", "h", "l", "c", "v", "q"}
-            assert candle["h"] >= max(candle["o"], candle["c"])
-            assert candle["l"] <= min(candle["o"], candle["c"])
+        assert set(payload["intervals"]) == {"1d", "1h"}
+        daily = payload["intervals"]["1d"]["candles"]
+        hourly = payload["intervals"]["1h"]["candles"]
+        assert 1 <= len(daily) <= 90
+        assert 1 <= len(hourly) <= 120
+        for candles in (daily, hourly):
+            for candle in candles:
+                assert set(candle) == {"t", "o", "h", "l", "c", "v", "q"}
+                assert candle["h"] >= max(candle["o"], candle["c"])
+                assert candle["l"] <= min(candle["o"], candle["c"])
         # newest closed daily candle opens exactly one day before `now`'s date
-        assert datetime.fromtimestamp(candles[-1]["t"] / 1000, UTC).date() == (NOW - timedelta(days=1)).date()
+        assert datetime.fromtimestamp(daily[-1]["t"] / 1000, UTC).date() == (NOW - timedelta(days=1)).date()
 
 
 class TestUpdateCharts:
@@ -33,7 +36,8 @@ class TestUpdateCharts:
         assert summary["failures"] == []
         payload = json.loads(chart_path(tmp_path, "AAAUSDT").read_text())
         assert payload["symbol"] == "AAAUSDT"
-        assert payload["candles"]
+        assert payload["intervals"]["1d"]["candles"]
+        assert payload["intervals"]["1h"]["candles"]
 
     def test_per_symbol_failure_is_collected_not_raised(self, tmp_path):
         client = FakeClient(NOW, breakouts=set(), fail_symbols={"BBBUSDT"})
