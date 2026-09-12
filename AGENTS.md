@@ -3,7 +3,7 @@
 Shanzhai Signal Desk — static Binance signal dashboard. Python stdlib-only CLI
 (`shanzhai/`) builds `public/` from `state/`; a Cloudflare Worker (`worker/`)
 delivers email digests. The live Binance pipeline runs on systemd timers
-(`deploy/`) — `daily` at 06:00 and `choch` hourly, Asia/Shanghai.
+(`deploy/`) — `daily` at 08:05 (after Binance's UTC daily close) and `choch` hourly, Asia/Shanghai.
 
 ## Verify loop
 

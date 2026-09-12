@@ -6,10 +6,11 @@ Cloudflare/Resend credentials and privileged host configuration.
 ## 1. Goal
 
 Publish a static, mobile-friendly market dashboard at
-`https://shanzhai.shaojiang61.site`. At 06:00 Asia/Shanghai it refreshes the
+`https://shanzhai.shaojiang61.site`. At 08:05 Asia/Shanghai, after Binance's
+UTC daily candle closes, it refreshes the
 daily volume-spike universe. Five minutes after every closed Binance 1-hour
-candle it evaluates CHoCH breakouts, republishes the site, and sends one digest
-only when new signals exist.
+candle it evaluates CHoCH breakouts, republishes the site, and immediately
+emails any newly confirmed 二次突破 signal.
 
 The existing notebook remains a research artifact. Production uses the same
 market concepts through a deterministic CLI because notebook stdout and a
@@ -33,11 +34,12 @@ multi-page PDF are not a safe application data contract.
 - Idempotency key: symbol, interval and pivot candle open time. A newer confirmed
   pivot may trigger a later signal.
 - Initial import records history but sends no historical mail. Recovery scans
-  missing candles and emails at most one digest for signals no older than 24h.
-- Digest delivery: one merged digest per day at `DIGEST_HOUR` (default 08:00
-  Asia/Shanghai), collecting email-eligible signals since the previous digest
-  and collapsing repeated same-direction signals per symbol into a single entry
-  (24h cooldown). `last_digest_at` advances only on a successful send.
+  missing candles and immediately emails newly detected signals no older than
+  24h.
+- Immediate delivery: a fresh, email-eligible 二次突破 is sent after its CHoCH
+  scan. Failed requests are kept in the private `pending_notifications` outbox
+  and retried on the next scan; the Worker delivery key prevents duplicate
+  subscriber deliveries.
 - Public read-only dashboard. Email subscription uses double opt-in, Turnstile,
   one-click unsubscribe and rate limiting.
 - Browser times use Asia/Shanghai and always show both page update time and the
@@ -103,7 +105,8 @@ signal labels, 44px targets and reduced-motion support are mandatory.
 4. Operations: systemd oneshot/timers, atomic deployment, bounded logs,
    Nginx/Tunnel routing and administrator failure notification.
 5. Production: DNS/Tunnel/Nginx/Worker/D1/Resend configured; run a synthetic
-   subscription and unsubscribe; verify one full 1h scan and next 06:00 scan.
+   subscription and unsubscribe; verify one full 1h scan and immediate delivery
+   of a synthetic 二次突破 signal.
 
 ## 7. Risks and optimizations
 

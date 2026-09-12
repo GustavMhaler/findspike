@@ -1,4 +1,4 @@
-# Shanzhai daily scan — 06:00 Asia/Shanghai
+# Shanzhai daily scan — 08:05 Asia/Shanghai after Binance daily close
 [Unit]
 Description=Shanzhai daily volume-spike scan and site build
 After=network-online.target

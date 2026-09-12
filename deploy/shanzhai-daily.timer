@@ -1,8 +1,8 @@
 [Unit]
-Description=Run Shanzhai daily scan at 06:00 Asia/Shanghai
+Description=Run Shanzhai daily scan at 08:05 Asia/Shanghai after Binance daily close
 
 [Timer]
-OnCalendar=*-*-* 06:00:00 Asia/Shanghai
+OnCalendar=*-*-* 08:05:00 Asia/Shanghai
 Persistent=true
 RandomizedDelaySec=120
 

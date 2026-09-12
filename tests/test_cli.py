@@ -47,6 +47,53 @@ def test_daily_and_choch_end_to_end(tmp_path, fake_client):
     assert chart["symbol"] == "AAAUSDT" and chart["intervals"]["1d"]["candles"]
 
 
+def test_second_breakout_is_delivered_immediately(tmp_path, fake_client, monkeypatch):
+    output = tmp_path / "public"
+    state = tmp_path / "state"
+    deliveries = []
+
+    # The old implementation only delivered during this configured hour. An
+    # immediate signal must not depend on the daily digest slot.
+    shanghai_hour = datetime.now(UTC).astimezone(timezone(timedelta(hours=8))).hour
+    monkeypatch.setenv("DIGEST_HOUR", str((shanghai_hour + 1) % 24))
+    monkeypatch.setattr(
+        cli,
+        "_deliver",
+        lambda _state, payload: deliveries.append(payload) or {"sent": True},
+    )
+
+    assert cli.main(["daily", "--output", str(output), "--state", str(state)]) == 0
+    assert cli.main(["choch", "--output", str(output), "--state", str(state)]) == 0
+
+    assert len(deliveries) == 1
+    assert [signal["level_tag"] for signal in deliveries[0]["signals"]] == ["second"]
+    assert deliveries[0]["signals"][0]["symbol"] == "AAAUSDT"
+
+
+def test_failed_immediate_delivery_is_retried_on_next_scan(tmp_path, fake_client, monkeypatch):
+    output = tmp_path / "public"
+    state = tmp_path / "state"
+    deliveries = []
+    outcomes = iter([{"sent": False, "error": "TimeoutError"}, {"sent": True}])
+    monkeypatch.setattr(
+        cli,
+        "_deliver",
+        lambda _state, payload: deliveries.append(payload) or next(outcomes),
+    )
+
+    assert cli.main(["daily", "--output", str(output), "--state", str(state)]) == 0
+    assert cli.main(["choch", "--output", str(output), "--state", str(state)]) == 0
+    status = json.loads((state / "status.json").read_text())
+    assert status["pending_notifications"]
+
+    # The scan is idempotent, but the failed signal remains in the private
+    # outbox and is retried even though no new signal is found.
+    assert cli.main(["choch", "--output", str(output), "--state", str(state)]) == 0
+    assert len(deliveries) == 2
+    status = json.loads((state / "status.json").read_text())
+    assert "pending_notifications" not in status
+
+
 def test_charts_command_updates_payloads_and_republishes(tmp_path, fake_client):
     output = tmp_path / "public"
     state = tmp_path / "state"

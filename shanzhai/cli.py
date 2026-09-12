@@ -3,7 +3,7 @@
 Commands:
 
   daily   refresh the volume-spike universe and republish the site
-  coach   evaluate newly closed 1h candles, republish, request digest delivery
+  choch   evaluate newly closed 1h candles, republish, immediately deliver new signals
   demo    build a sample site from deterministic synthetic data (no network)
   check   exit non-zero when the published site is stale
 
@@ -27,9 +27,8 @@ from .io_utils import read_json
 from .notify import (
     build_admin_alert_payload,
     build_digest_payload,
-    collect_digest,
-    digest_due,
     request_delivery,
+    select_immediate_signals,
 )
 from .pipeline import compose_latest, read_status_sidecar, scan_choch, scan_daily, write_status_sidecar
 from .review import call_llm, evaluate_pending, llm_config
@@ -38,11 +37,8 @@ from .site import build_site
 ALERT_AFTER_CONSECUTIVE_FAILURES = 3
 DAILY_STALE_AFTER = timedelta(hours=26)
 COACH_STALE_AFTER = timedelta(hours=2)
-DIGEST_HOUR_DEFAULT = 8  # Asia/Shanghai: one merged digest per day
-
 ENV_WORKER_URL = "WORKER_URL"
 ENV_DIGEST_SECRET = "DIGEST_SECRET"
-ENV_DIGEST_HOUR = "DIGEST_HOUR"
 ENV_TURNSTILE_SITEKEY = "TURNSTILE_SITEKEY"
 ENV_BINANCE_BASE_URL = "BINANCE_BASE_URL"
 
@@ -103,33 +99,31 @@ def _maybe_admin_alert(state: Path, command: str, message: str) -> None:
     print(f"admin alert: {summary}", file=sys.stderr)
 
 
-def _digest_hour() -> int:
-    raw = os.environ.get(ENV_DIGEST_HOUR, "").strip()
-    try:
-        return int(raw) if raw else DIGEST_HOUR_DEFAULT
-    except ValueError:
-        return DIGEST_HOUR_DEFAULT
+PENDING_NOTIFY_KEY = "pending_notifications"
 
 
-def _deliver_digest(state: Path, now: datetime) -> dict:
-    """Deliver the merged daily digest when the scan lands in the digest slot.
-
-    Reads the latest history from state, selects email-eligible signals since
-    the previous digest (with per-symbol cooldown), and only advances
-    ``last_digest_at`` on a successful send so a failed delivery is retried on
-    the next run.
-    """
+def _deliver_immediate(state: Path, signals: list[dict], now: datetime) -> dict:
+    """Deliver new 二次突破 signals now, retrying a failed request next scan."""
     status = read_status_sidecar(state)
-    last_digest_at = status.get("last_digest_at")
-    last_digest_at = datetime.fromisoformat(last_digest_at) if last_digest_at else None
-    history = read_json(state / "choch_history.json", [])
-    signals = collect_digest(history, last_digest_at, now)
-    if not signals:
-        return {"sent": False, "error": "no new email-eligible signals"}
-    summary = _deliver(state, build_digest_payload(signals, now))
+    pending = status.get(PENDING_NOTIFY_KEY, [])
+    if not isinstance(pending, list):
+        pending = []
+    candidates = select_immediate_signals([*pending, *signals], now)
+    if not candidates:
+        if pending:
+            status.pop(PENDING_NOTIFY_KEY, None)
+            write_status_sidecar(state, status)
+        return {"sent": False, "attempted": False, "error": "no new email-eligible signals"}
+
+    # Persist the outbox before the network request. If the Worker is down or
+    # the process exits after this point, the next hourly scan retries it.
+    status[PENDING_NOTIFY_KEY] = candidates
+    write_status_sidecar(state, status)
+    summary = _deliver(state, build_digest_payload(candidates, now))
+    summary["attempted"] = True
     if summary.get("sent"):
         status = read_status_sidecar(state)
-        status["last_digest_at"] = now.isoformat()
+        status.pop(PENDING_NOTIFY_KEY, None)
         write_status_sidecar(state, status)
     return summary
 
@@ -176,9 +170,10 @@ def cmd_choch(args: argparse.Namespace) -> int:
             f"choch ok: {result['watch_count']} watched, {result['new_signal_count']} new, "
             f"{result['notify_count']} notify in {result['duration_seconds']}s"
         )
-        if not args.seed and digest_due(now, _digest_hour()):
-            summary = _deliver_digest(state, now)
-            print(f"digest delivery: {summary}")
+        if not args.seed:
+            summary = _deliver_immediate(state, result["signals"], now)
+            if summary["attempted"]:
+                print(f"immediate delivery: {summary}")
         return 0
     except Exception as exc:
         _record_failure(read_status_sidecar(state), "choch", state, now, str(exc))

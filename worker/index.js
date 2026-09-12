@@ -5,7 +5,7 @@
  *   POST /api/subscriptions   {email, turnstile}   double opt-in subscribe
  *   GET  /api/confirm         ?e=<email>&t=<token>  activate a subscription
  *   GET  /api/unsubscribe     ?e=<email>&t=<token>  one-click unsubscribe
- *   POST /api/deliver         {secret, kind, ...}   digest / admin alert
+ *   POST /api/deliver         {secret, kind, ...}   signal email / admin alert
  *
  * Secrets come from Worker bindings/secrets only — never from source.
  *   env: DB (D1), RESEND_API_KEY, TURNSTILE_SECRET, DIGEST_SECRET,
@@ -157,7 +157,7 @@ async function handleSubscribe(request) {
     email,
     "Confirm your Shanzhai Signal Desk subscription",
     [
-      "Confirm your email to start receiving CHoCH signal digests.",
+      "Confirm your email to start receiving CHoCH signal emails.",
       "",
       confirmUrl,
       "",
@@ -193,7 +193,7 @@ async function handleConfirm(request) {
     email,
     "You are subscribed to Shanzhai Signal Desk",
     [
-      "You are subscribed. One digest will be sent only when a new CHoCH signal is confirmed.",
+      "You are subscribed. An email will be sent when a new 二次突破 CHoCH signal is confirmed.",
       "",
       "Unsubscribe any time:",
       `${env.BASE_URL}/api/unsubscribe?e=${encodeURIComponent(email)}&t=${await unsubscribeToken(email)}`,

@@ -2,14 +2,15 @@
 
 ## Scheduled behavior
 
-- `shanzhai-daily.timer`: 06:00 Asia/Shanghai, refresh volume universe and site.
+- `shanzhai-daily.timer`: 08:05 Asia/Shanghai, after the Binance UTC daily
+  candle closes, refresh volume universe and site.
   The daily run also refreshes the hover-chart payloads (`state/charts/` →
   `public/charts/`) for the current spike symbols; chart fetch failures never
   fail the daily scan.
 - `shanzhai-choch.timer`: 00:05, 04:05, 08:05, 12:05, 16:05 and 20:05,
-  evaluate newly closed 1h candles and rebuild. Digest delivery happens only on
-  the scan that lands in the `DIGEST_HOUR` slot (default 08:05); other scans
-  accumulate email-eligible signals silently.
+  evaluate newly closed 1h candles and rebuild. When a fresh 二次突破 signal is
+  found, that scan immediately requests email delivery; other scans stay quiet.
+  Failed requests are retained in `state/status.json` and retried next scan.
 - A failed build leaves `public/` untouched. The status sidecar records the
   failure for the next successful build and administrator alerting.
 
@@ -56,6 +57,7 @@ specific unavailable message. Do not delete D1 during rollback.
   1h30m is an incident.
 - Data failure: retain last-known-good, retry three times with backoff, alert the
   administrator after consecutive failure.
-- Resend failure: retain and publish signal, retry notification separately.
+- Resend failure: retain and publish signal, retry `pending_notifications`
+  separately on the next CHoCH scan.
 - Never repair by clearing state; duplicate-delivery keys depend on it.
 
