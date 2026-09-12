@@ -67,8 +67,9 @@ market data):
 The `choch` command requests email delivery immediately when a fresh,
 email-eligible 二次突破 is detected. It needs `WORKER_URL`/`DIGEST_SECRET`
 configured in the environment (see `deploy/shanzhai.env.example`). Failed
-delivery requests remain pending and are retried by the next `choch` scan. The
-`review` command needs the AI config
+delivery requests remain pending and are retried by the next `choch` scan;
+expired pending entries are recorded in `expired_notifications`. The `review`
+command needs the AI config
 (`AI_BASE_URL`/`AI_MODEL`/`AI_API_KEY`) and only evaluates matured swing
 signals (≥24h old); stale/duplicate signals are never emailed.
 

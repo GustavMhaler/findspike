@@ -100,6 +100,7 @@ def _maybe_admin_alert(state: Path, command: str, message: str) -> None:
 
 
 PENDING_NOTIFY_KEY = "pending_notifications"
+EXPIRED_NOTIFY_KEY = "expired_notifications"
 
 
 def _deliver_immediate(state: Path, signals: list[dict], now: datetime) -> dict:
@@ -111,6 +112,18 @@ def _deliver_immediate(state: Path, signals: list[dict], now: datetime) -> dict:
     candidates = select_immediate_signals([*pending, *signals], now)
     if not candidates:
         if pending:
+            expired = status.get(EXPIRED_NOTIFY_KEY, [])
+            if not isinstance(expired, list):
+                expired = []
+            expired.extend(
+                {
+                    "key": item.get("key") if isinstance(item, dict) else None,
+                    "signal_time": item.get("signal_time") if isinstance(item, dict) else None,
+                    "expired_at": now.isoformat(),
+                }
+                for item in pending
+            )
+            status[EXPIRED_NOTIFY_KEY] = expired[-100:]
             status.pop(PENDING_NOTIFY_KEY, None)
             write_status_sidecar(state, status)
         return {"sent": False, "attempted": False, "error": "no new email-eligible signals"}

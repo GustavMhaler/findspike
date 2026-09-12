@@ -15,6 +15,7 @@
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_ATTEMPTS = 5;
 const CONFIRM_TTL_MS = 24 * 3600 * 1000;
+const SIGNAL_MAX_AGE_MS = 26 * 3600 * 1000;
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -253,9 +254,22 @@ async function handleDeliver(request) {
   }
   const signals = Array.isArray(body.signals) ? body.signals : [];
   if (!signals.length) return json({ sent: true, delivered: 0 });
-  // Noise control: only swing-layer signals are emailed; internal-layer
-  // signals stay visible on the dashboard page only.
-  const swingSignals = signals.filter((s) => s.layer === "swing");
+  // Defense in depth: the CLI applies this gate too, but the public delivery
+  // boundary must not trust a malformed or replayed authenticated payload.
+  const now = Date.now();
+  const swingSignals = signals.filter((s) => {
+    if (!s || typeof s !== "object") return false;
+    const signalTime = Date.parse(s.signal_time);
+    return s.layer === "swing"
+      && s.direction === "bullish"
+      && s.email_ok === true
+      && s.notify === true
+      && s.level_tag === "second"
+      && s.key
+      && Number.isFinite(signalTime)
+      && signalTime <= now
+      && now - signalTime <= SIGNAL_MAX_AGE_MS;
+  });
   if (!swingSignals.length) return json({ sent: true, delivered: 0, note: "internal only" });
 
   const { results: subscribers } = await env.DB.prepare(
@@ -263,22 +277,31 @@ async function handleDeliver(request) {
   ).all();
   let delivered = 0;
   for (const subscriber of subscribers) {
-    const { results: done } = await env.DB.prepare(
-      "SELECT signal_key FROM deliveries WHERE email = ?"
-    ).bind(subscriber.email).all();
-    const doneKeys = new Set(done.map((r) => r.signal_key));
-    const fresh = swingSignals.filter((s) => s.key && !doneKeys.has(s.key));
-    if (!fresh.length) continue;
-
-    const subject = `Shanzhai 信号：${fresh.length} 个新 CHoCH（${fresh.filter((s) => s.direction === "bullish").length} 涨 ${fresh.filter((s) => s.direction === "bearish").length} 跌）`;
-    const unsubscribeUrl = `${env.BASE_URL}/api/unsubscribe?e=${encodeURIComponent(subscriber.email)}&t=${await unsubscribeToken(subscriber.email)}`;
-    const inserts = fresh.map((s) =>
+    // Claim keys before calling Resend. This closes the race where concurrent
+    // delivery requests both observe an empty deliveries row and send twice.
+    const claims = swingSignals.map((s) =>
       env.DB.prepare(
         "INSERT OR IGNORE INTO deliveries (email, signal_key, created_at) VALUES (?, ?, ?)"
       ).bind(subscriber.email, s.key, new Date().toISOString())
     );
-    await sendEmail(subscriber.email, subject, digestText(fresh, unsubscribeUrl), digestHtml(fresh, unsubscribeUrl));
-    await env.DB.batch(inserts);
+    const claimResults = await env.DB.batch(claims);
+    const fresh = swingSignals.filter((_, index) => claimResults[index]?.meta?.changes === 1);
+    if (!fresh.length) continue;
+
+    const subject = `Shanzhai 信号：${fresh.length} 个新 CHoCH（${fresh.filter((s) => s.direction === "bullish").length} 涨 ${fresh.filter((s) => s.direction === "bearish").length} 跌）`;
+    const unsubscribeUrl = `${env.BASE_URL}/api/unsubscribe?e=${encodeURIComponent(subscriber.email)}&t=${await unsubscribeToken(subscriber.email)}`;
+    try {
+      await sendEmail(subscriber.email, subject, digestText(fresh, unsubscribeUrl), digestHtml(fresh, unsubscribeUrl));
+    } catch (error) {
+      // Release claims only when Resend reports failure so a later scan can
+      // retry. If the Worker crashes after a successful send, the claim stays
+      // in D1 and prevents a duplicate on the next request.
+      await env.DB.batch(fresh.map((s) =>
+        env.DB.prepare("DELETE FROM deliveries WHERE email = ? AND signal_key = ?")
+          .bind(subscriber.email, s.key)
+      ));
+      throw error;
+    }
     delivered += fresh.length;
   }
   return json({ sent: true, delivered });

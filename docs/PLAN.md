@@ -38,8 +38,9 @@ multi-page PDF are not a safe application data contract.
   24h.
 - Immediate delivery: a fresh, email-eligible 二次突破 is sent after its CHoCH
   scan. Failed requests are kept in the private `pending_notifications` outbox
-  and retried on the next scan; the Worker delivery key prevents duplicate
-  subscriber deliveries.
+  and retried on the next scan; expired entries are recorded in
+  `expired_notifications`, and the Worker claims delivery keys before sending
+  to prevent concurrent duplicate subscriber deliveries.
 - Public read-only dashboard. Email subscription uses double opt-in, Turnstile,
   one-click unsubscribe and rate limiting.
 - Browser times use Asia/Shanghai and always show both page update time and the

@@ -14,7 +14,8 @@ def _signal(key: str, signal_time: str, symbol: str = "AAAUSDT", **overrides) ->
     signal = {
         "symbol": symbol, "key": key, "close": 0.14, "level": 0.13,
         "breakout_pct": 1.5, "signal_time": signal_time, "tag": "BOS",
-        "direction": "bullish", "layer": "swing", "email_ok": True, "notify": True,
+        "direction": "bullish", "layer": "swing", "level_tag": "second",
+        "email_ok": True, "notify": True,
     }
     signal.update(overrides)
     return signal

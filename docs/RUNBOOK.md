@@ -7,10 +7,12 @@
   The daily run also refreshes the hover-chart payloads (`state/charts/` →
   `public/charts/`) for the current spike symbols; chart fetch failures never
   fail the daily scan.
-- `shanzhai-choch.timer`: 00:05, 04:05, 08:05, 12:05, 16:05 and 20:05,
+- `shanzhai-choch.timer`: every hour at minute 05,
   evaluate newly closed 1h candles and rebuild. When a fresh 二次突破 signal is
   found, that scan immediately requests email delivery; other scans stay quiet.
-  Failed requests are retained in `state/status.json` and retried next scan.
+  Failed requests are retained in `state/status.json` and retried next scan;
+  notifications that age past the freshness window are recorded under
+  `expired_notifications` instead of being silently discarded.
 - A failed build leaves `public/` untouched. The status sidecar records the
   failure for the next successful build and administrator alerting.
 

@@ -39,6 +39,10 @@ DIGEST_MAX_AGE = timedelta(hours=26)
 
 # Subscribers opted out of bearish signals; digests are bullish-only.
 DIGEST_DIRECTIONS = ("bullish",)
+REQUIRED_DELIVERY_FIELDS = (
+    "symbol", "key", "close", "level", "breakout_pct", "signal_time",
+    "tag", "direction", "layer", "level_tag",
+)
 
 def build_digest_payload(signals: list[dict], scan_at: datetime) -> dict:
     fresh = [
@@ -56,6 +60,7 @@ def build_digest_payload(signals: list[dict], scan_at: datetime) -> dict:
                 "signal_time": s["signal_time"], "tag": s["tag"],
                 "direction": s["direction"], "layer": s["layer"],
                 "level_tag": s.get("level_tag", "small"),
+                "email_ok": s.get("email_ok", False), "notify": s.get("notify", False),
             }
             for s in fresh
         ],
@@ -81,6 +86,10 @@ def select_immediate_signals(
         if not isinstance(signal, dict):
             continue
         if not signal.get("notify") or not signal.get("email_ok"):
+            continue
+        if signal.get("level_tag") != "second":
+            continue
+        if any(field not in signal for field in REQUIRED_DELIVERY_FIELDS):
             continue
         key = signal.get("key")
         if key and key in seen_keys:

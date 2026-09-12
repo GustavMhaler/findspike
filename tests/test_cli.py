@@ -94,6 +94,24 @@ def test_failed_immediate_delivery_is_retried_on_next_scan(tmp_path, fake_client
     assert "pending_notifications" not in status
 
 
+def test_expired_pending_delivery_is_recorded(tmp_path):
+    state = tmp_path / "state"
+    state.mkdir()
+    old = (datetime.now(UTC) - timedelta(days=2)).isoformat()
+    status = {
+        "consecutive_failures": 0,
+        "pending_notifications": [{"key": "AAA:old", "signal_time": old}],
+    }
+    (state / "status.json").write_text(json.dumps(status))
+
+    summary = cli._deliver_immediate(state, [], datetime.now(UTC))
+
+    assert summary["attempted"] is False
+    saved = json.loads((state / "status.json").read_text())
+    assert "pending_notifications" not in saved
+    assert saved["expired_notifications"][0]["key"] == "AAA:old"
+
+
 def test_charts_command_updates_payloads_and_republishes(tmp_path, fake_client):
     output = tmp_path / "public"
     state = tmp_path / "state"
