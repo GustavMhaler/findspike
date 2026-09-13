@@ -232,6 +232,13 @@ tr[data-chart] { cursor: pointer; }
 .footer a { color: var(--footer-ink); }
 .footer a:hover { color: var(--primary-active); }
 .footer .fine { margin-top: 32px; font-size: 12px; color: #707a8a; border-top: 1px solid #eaecef; padding-top: 16px; }
+.footer-disclaimer {
+  margin-top: 32px; padding: 16px 18px; border: 1px solid #e5c04a;
+  border-left: 3px solid var(--primary); background: #fffdf0; border-radius: 8px;
+  color: #3d3517; font-size: 13px;
+}
+.footer-disclaimer h3 { margin: 0 0 8px; color: #181a20; }
+.footer-disclaimer p { margin: 4px 0 0; }
 
 @media (max-width: 1024px) {
   .cols { grid-template-columns: 1fr 1fr; }
@@ -610,6 +617,11 @@ def _page_html(latest: dict, site_key: str) -> str:
         </ul>
       </div>
     </div>
+    <section class="footer-disclaimer" aria-labelledby="disclaimer-title">
+      <h3 id="disclaimer-title">网站声明</h3>
+      <p>网站脚本底层来自 B 站 UP 主「瑞Rui评」，关注 rui瑞评谢谢喵！</p>
+      <p>突破和推送逻辑为纯 AI 编写，不构成任何投资建议，币圈有风险，炒币需谨慎！</p>
+    </section>
     <p class="fine">All data is generated deterministically from closed Binance candles. Signals can be delayed by design:
        a structure is confirmed only by the candles that follow it. Past performance does not guarantee future results.
        This project is not investment advice.</p>

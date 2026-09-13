@@ -69,6 +69,15 @@ def test_page_contains_data_and_visual_tokens(tmp_path):
     assert "function sortTable" in html
 
 
+def test_page_contains_site_disclaimer(tmp_path):
+    output = tmp_path / "public"
+    build_site(output, LATEST)
+    html = (output / "index.html").read_text()
+    assert "网站脚本底层来自 B 站 UP 主「瑞Rui评」，关注 rui瑞评谢谢喵！" in html
+    assert "突破和推送逻辑为纯 AI 编写，不构成任何投资建议，币圈有风险，炒币需谨慎！" in html
+    assert 'aria-labelledby="disclaimer-title"' in html
+
+
 def test_atomic_swap_keeps_previous_site_on_failure(tmp_path, monkeypatch):
     output = tmp_path / "public"
     build_site(output, LATEST)
