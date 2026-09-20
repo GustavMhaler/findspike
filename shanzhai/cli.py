@@ -3,7 +3,8 @@
 Commands:
 
   daily   refresh the volume-spike universe and republish the site
-  choch   evaluate newly closed 1h candles, republish, immediately deliver new signals
+  choch   evaluate newly closed 15m triggers against confirmed 1h structure,
+          republish, immediately deliver new signals
   demo    build a sample site from deterministic synthetic data (no network)
   check   exit non-zero when the published site is stale
 
@@ -129,7 +130,7 @@ def _deliver_immediate(state: Path, signals: list[dict], now: datetime) -> dict:
         return {"sent": False, "attempted": False, "error": "no new email-eligible signals"}
 
     # Persist the outbox before the network request. If the Worker is down or
-    # the process exits after this point, the next hourly scan retries it.
+    # the process exits after this point, the next 15m scan retries it.
     status[PENDING_NOTIFY_KEY] = candidates
     write_status_sidecar(state, status)
     summary = _deliver(state, build_digest_payload(candidates, now))
@@ -284,7 +285,9 @@ def main(argv: list[str] | None = None) -> int:
     p_daily.add_argument("--workers", type=int, default=6)
     p_daily.set_defaults(func=cmd_daily)
 
-    p_choch = sub.add_parser("choch", help="evaluate closed 1h candles for BOS/CHoCH, republish, deliver digest")
+    p_choch = sub.add_parser(
+        "choch", help="evaluate closed 15m triggers against 1h structure, republish, deliver signals"
+    )
     p_choch.add_argument("--output", default="public")
     p_choch.add_argument("--state", default="state")
     p_choch.add_argument("--workers", type=int, default=6)

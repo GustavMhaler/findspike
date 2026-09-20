@@ -1,6 +1,6 @@
-# Shanzhai CHoCH scan — 5 minutes after every 1h candle closes
+# Shanzhai CHoCH scan — 5 minutes after every 15m candle closes
 [Unit]
-Description=Shanzhai CHoCH 1h BOS/CHoCH scan, site build and immediate signal delivery
+Description=Shanzhai CHoCH 1h/15m BOS/CHoCH scan, site build and immediate signal delivery
 After=network-online.target
 Wants=network-online.target
 

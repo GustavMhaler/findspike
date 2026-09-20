@@ -7,9 +7,11 @@
   The daily run also refreshes the hover-chart payloads (`state/charts/` →
   `public/charts/`) for the current spike symbols; chart fetch failures never
   fail the daily scan.
-- `shanzhai-choch.timer`: every hour at minute 05,
-  evaluate newly closed 1h candles and rebuild. When a fresh 二次突破 signal is
-  found, that scan immediately requests email delivery; other scans stay quiet.
+- `shanzhai-choch.timer`: at minutes 05, 20, 35 and 50,
+  evaluate newly closed 15m triggers against confirmed 1h structure and rebuild.
+  When a fresh 二次突破 signal is found, that scan immediately requests email
+  delivery; other scans stay quiet. The five-minute offset ensures the 15m
+  candle is closed before the anti-repaint scan runs.
   Failed requests are retained in `state/status.json` and retried next scan;
   notifications that age past the freshness window are recorded under
   `expired_notifications` instead of being silently discarded.
@@ -62,4 +64,3 @@ specific unavailable message. Do not delete D1 during rollback.
 - Resend failure: retain and publish signal, retry `pending_notifications`
   separately on the next CHoCH scan.
 - Never repair by clearing state; duplicate-delivery keys depend on it.
-
