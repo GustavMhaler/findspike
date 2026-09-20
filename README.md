@@ -42,6 +42,13 @@ See [docs/PLAN.md](docs/PLAN.md) for the implementation plan and
 The production CLI is stdlib-only; `requirements.txt` covers the notebook
 runtime only.
 
+## 上游项目与许可证
+
+本项目基于 [RuiRuiPing/Find-Spike-Volume](https://github.com/RuiRuiPing/Find-Spike-Volume)
+构建，并在其基础上扩展了 CHoCH/SMC 结构分析、15 分钟触发、AI 复盘、邮件通知和
+Cloudflare Worker 订阅功能。上游项目采用 MIT License；本仓库保留其版权声明和许可
+条款，完整内容见 [LICENSE](LICENSE)。
+
 ## Local build
 
 ```bash
