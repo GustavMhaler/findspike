@@ -37,12 +37,26 @@ def request_delivery(
 # structures (structure-time drift) must never reach subscribers' inboxes.
 DIGEST_MAX_AGE = timedelta(hours=26)
 
-# Subscribers opted out of bearish signals; digests are bullish-only.
+# Both email and QQ subscribers receive bullish signals only.
 DIGEST_DIRECTIONS = ("bullish",)
+QQ_DIRECTIONS = ("bullish",)
+BREAKOUT_LEVEL_TAGS = ("first", "second")
 REQUIRED_DELIVERY_FIELDS = (
     "symbol", "key", "close", "level", "breakout_pct", "signal_time",
     "tag", "direction", "layer", "level_tag",
 )
+
+
+def _signal_payload(signal: dict) -> dict:
+    return {
+        "symbol": signal["symbol"], "key": signal["key"], "close": signal["close"],
+        "level": signal["level"], "breakout_pct": signal["breakout_pct"],
+        "signal_time": signal["signal_time"], "tag": signal["tag"],
+        "direction": signal["direction"], "layer": signal["layer"],
+        "level_tag": signal.get("level_tag", "small"),
+        "email_ok": signal.get("email_ok", False), "notify": signal.get("notify", False),
+    }
+
 
 def build_digest_payload(signals: list[dict], scan_at: datetime) -> dict:
     fresh = [
@@ -53,17 +67,7 @@ def build_digest_payload(signals: list[dict], scan_at: datetime) -> dict:
     return {
         "kind": "digest",
         "scan_at": scan_at.isoformat(),
-        "signals": [
-            {
-                "symbol": s["symbol"], "key": s["key"], "close": s["close"],
-                "level": s["level"], "breakout_pct": s["breakout_pct"],
-                "signal_time": s["signal_time"], "tag": s["tag"],
-                "direction": s["direction"], "layer": s["layer"],
-                "level_tag": s.get("level_tag", "small"),
-                "email_ok": s.get("email_ok", False), "notify": s.get("notify", False),
-            }
-            for s in fresh
-        ],
+        "signals": [_signal_payload(s) for s in fresh],
     }
 
 
@@ -106,6 +110,49 @@ def select_immediate_signals(
             seen_keys.add(key)
         selected.append(signal)
     return sorted(selected, key=lambda s: s["signal_time"])
+
+
+def select_qq_signals(
+    signals: list[dict],
+    now: datetime,
+    max_age: timedelta = DIGEST_MAX_AGE,
+) -> list[dict]:
+    """Select fresh first/second breakout signals for QQ delivery.
+
+    QQ receives the first breakout that is intentionally dashboard-only for
+    email, as well as the second breakout. Bearish signals remain dashboard-
+    only and are excluded from all outbound notifications.
+    """
+    cutoff = now - max_age
+    selected = []
+    seen_keys = set()
+    for signal in signals:
+        if not isinstance(signal, dict):
+            continue
+        if signal.get("direction") not in QQ_DIRECTIONS:
+            continue
+        if signal.get("layer") != "swing" or signal.get("level_tag") not in BREAKOUT_LEVEL_TAGS:
+            continue
+        if any(field not in signal for field in REQUIRED_DELIVERY_FIELDS):
+            continue
+        key = signal.get("key")
+        if key and key in seen_keys:
+            continue
+        try:
+            signal_time = datetime.fromisoformat(signal["signal_time"])
+        except (KeyError, ValueError):
+            continue
+        if signal_time <= cutoff or signal_time > now:
+            continue
+        if key:
+            seen_keys.add(key)
+        selected.append(signal)
+    return sorted(selected, key=lambda s: s["signal_time"])
+
+
+def build_qq_signals(signals: list[dict], scan_at: datetime) -> list[dict]:
+    """Build the QQ portion of a delivery request, including first breakouts."""
+    return [_signal_payload(s) for s in select_qq_signals(signals, scan_at)]
 
 
 def build_admin_alert_payload(command: str, message: str, at: datetime) -> dict:

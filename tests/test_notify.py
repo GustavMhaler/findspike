@@ -3,7 +3,9 @@ from datetime import datetime, timedelta, timezone
 from shanzhai.notify import (
     DIGEST_MAX_AGE,
     build_digest_payload,
+    build_qq_signals,
     select_immediate_signals,
+    select_qq_signals,
 )
 
 UTC = timezone.utc
@@ -75,3 +77,53 @@ class TestImmediateSelection:
         newer = _signal("BBBUSDT:swing:BOS:2", (NOW - timedelta(hours=1)).isoformat(), "BBBUSDT")
         selected = select_immediate_signals([newer, older], NOW)
         assert [s["symbol"] for s in selected] == ["AAAUSDT", "BBBUSDT"]
+
+
+class TestQQSelection:
+    def test_first_and_second_breakouts_are_selected_for_qq(self):
+        first = _signal(
+            "AAAUSDT:swing:BOS:1",
+            (NOW - timedelta(hours=2)).isoformat(),
+            email_ok=False,
+            notify=False,
+            level_tag="first",
+        )
+        second = _signal("AAAUSDT:swing:BOS:2", (NOW - timedelta(hours=1)).isoformat())
+        bearish = _signal(
+            "BBBUSDT:swing:CHoCH:3",
+            (NOW - timedelta(minutes=30)).isoformat(),
+            "BBBUSDT",
+            direction="bearish",
+            email_ok=False,
+            notify=False,
+            level_tag="first",
+        )
+        selected = select_qq_signals([second, bearish, first], NOW)
+        assert [s["key"] for s in selected] == [first["key"], second["key"]]
+
+    def test_qq_payload_preserves_first_breakout_without_email_flags(self):
+        first = _signal(
+            "AAAUSDT:swing:BOS:1",
+            (NOW - timedelta(hours=2)).isoformat(),
+            email_ok=False,
+            notify=False,
+            level_tag="first",
+        )
+        payload = build_qq_signals([first], NOW)
+        assert payload[0]["level_tag"] == "first"
+        assert payload[0]["email_ok"] is False
+
+    def test_stale_and_non_swing_signals_are_excluded(self):
+        stale = _signal(
+            "AAAUSDT:swing:BOS:1",
+            (NOW - timedelta(hours=27)).isoformat(),
+            level_tag="first",
+        )
+        small = _signal(
+            "BBBUSDT:small:BOS:2",
+            (NOW - timedelta(hours=1)).isoformat(),
+            "BBBUSDT",
+            layer="small",
+            level_tag="first",
+        )
+        assert select_qq_signals([stale, small], NOW) == []

@@ -15,3 +15,14 @@ BASE_URL = "https://shanzhai.shaojiang61.site"
 [[routes]]
 pattern = "shanzhai.shaojiang61.site/api/*"
 zone_name = "shaojiang61.site"
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
+
+[observability.traces]
+enabled = false
+head_sampling_rate = 1
+persist = true

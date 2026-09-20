@@ -28,8 +28,10 @@ from .io_utils import read_json
 from .notify import (
     build_admin_alert_payload,
     build_digest_payload,
+    build_qq_signals,
     request_delivery,
     select_immediate_signals,
+    select_qq_signals,
 )
 from .pipeline import compose_latest, read_status_sidecar, scan_choch, scan_daily, write_status_sidecar
 from .review import call_llm, evaluate_pending, llm_config
@@ -102,43 +104,89 @@ def _maybe_admin_alert(state: Path, command: str, message: str) -> None:
 
 PENDING_NOTIFY_KEY = "pending_notifications"
 EXPIRED_NOTIFY_KEY = "expired_notifications"
+PENDING_QQ_NOTIFY_KEY = "pending_qq_notifications"
+EXPIRED_QQ_NOTIFY_KEY = "expired_qq_notifications"
+
+
+def _expire_pending(
+    status: dict,
+    pending: list[dict],
+    candidates: list[dict],
+    expired_key: str,
+    now: datetime,
+) -> None:
+    if not pending:
+        return
+    candidate_keys = {item.get("key") for item in candidates}
+    expired = status.get(expired_key, [])
+    if not isinstance(expired, list):
+        expired = []
+    expired.extend(
+        {
+            "key": item.get("key") if isinstance(item, dict) else None,
+            "signal_time": item.get("signal_time") if isinstance(item, dict) else None,
+            "expired_at": now.isoformat(),
+        }
+        for item in pending
+        if not isinstance(item, dict) or item.get("key") not in candidate_keys
+    )
+    if expired:
+        status[expired_key] = expired[-100:]
+
+
+def _qq_delivery_failed(summary: dict) -> bool:
+    if not summary.get("sent"):
+        return True
+    delivered = summary.get("delivered")
+    if not isinstance(delivered, dict):
+        # Test doubles and older Workers do not include channel details.
+        return False
+    return bool(delivered.get("qq_error") or delivered.get("qq_failures"))
 
 
 def _deliver_immediate(state: Path, signals: list[dict], now: datetime) -> dict:
-    """Deliver new 二次突破 signals now, retrying a failed request next scan."""
+    """Deliver fresh email and QQ signals now, retrying failed requests."""
     status = read_status_sidecar(state)
-    pending = status.get(PENDING_NOTIFY_KEY, [])
-    if not isinstance(pending, list):
-        pending = []
-    candidates = select_immediate_signals([*pending, *signals], now)
-    if not candidates:
-        if pending:
-            expired = status.get(EXPIRED_NOTIFY_KEY, [])
-            if not isinstance(expired, list):
-                expired = []
-            expired.extend(
-                {
-                    "key": item.get("key") if isinstance(item, dict) else None,
-                    "signal_time": item.get("signal_time") if isinstance(item, dict) else None,
-                    "expired_at": now.isoformat(),
-                }
-                for item in pending
-            )
-            status[EXPIRED_NOTIFY_KEY] = expired[-100:]
-            status.pop(PENDING_NOTIFY_KEY, None)
-            write_status_sidecar(state, status)
-        return {"sent": False, "attempted": False, "error": "no new email-eligible signals"}
+    pending_email = status.get(PENDING_NOTIFY_KEY, [])
+    pending_qq = status.get(PENDING_QQ_NOTIFY_KEY, [])
+    if not isinstance(pending_email, list):
+        pending_email = []
+    if not isinstance(pending_qq, list):
+        pending_qq = []
 
-    # Persist the outbox before the network request. If the Worker is down or
-    # the process exits after this point, the next 15m scan retries it.
-    status[PENDING_NOTIFY_KEY] = candidates
-    write_status_sidecar(state, status)
-    summary = _deliver(state, build_digest_payload(candidates, now))
-    summary["attempted"] = True
-    if summary.get("sent"):
-        status = read_status_sidecar(state)
+    email_candidates = select_immediate_signals([*pending_email, *signals], now)
+    qq_candidates = select_qq_signals([*pending_qq, *pending_email, *signals], now)
+    _expire_pending(status, pending_email, email_candidates, EXPIRED_NOTIFY_KEY, now)
+    _expire_pending(status, pending_qq, qq_candidates, EXPIRED_QQ_NOTIFY_KEY, now)
+
+    if not email_candidates and not qq_candidates:
         status.pop(PENDING_NOTIFY_KEY, None)
-        write_status_sidecar(state, status)
+        status.pop(PENDING_QQ_NOTIFY_KEY, None)
+        if pending_email or pending_qq:
+            write_status_sidecar(state, status)
+        return {"sent": False, "attempted": False, "error": "no new notification signals"}
+
+    # Persist both outboxes before the network request. If the Worker is down
+    # or the process exits after this point, the next 15m scan retries them.
+    if email_candidates:
+        status[PENDING_NOTIFY_KEY] = email_candidates
+    else:
+        status.pop(PENDING_NOTIFY_KEY, None)
+    if qq_candidates:
+        status[PENDING_QQ_NOTIFY_KEY] = qq_candidates
+    else:
+        status.pop(PENDING_QQ_NOTIFY_KEY, None)
+    write_status_sidecar(state, status)
+    payload = build_digest_payload(email_candidates, now)
+    payload["qq_signals"] = build_qq_signals(qq_candidates, now)
+    summary = _deliver(state, payload)
+    summary["attempted"] = True
+    status = read_status_sidecar(state)
+    if summary.get("sent"):
+        status.pop(PENDING_NOTIFY_KEY, None)
+    if not _qq_delivery_failed(summary):
+        status.pop(PENDING_QQ_NOTIFY_KEY, None)
+    write_status_sidecar(state, status)
     return summary
 
 

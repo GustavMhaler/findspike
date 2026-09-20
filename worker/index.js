@@ -6,16 +6,22 @@
  *   GET  /api/confirm         ?e=<email>&t=<token>  activate a subscription
  *   GET  /api/unsubscribe     ?e=<email>&t=<token>  one-click unsubscribe
  *   POST /api/deliver         {secret, kind, ...}   signal email / admin alert
+ *   POST /api/qq/events       QQ Bot webhook events and C2C/group subscriptions
  *
  * Secrets come from Worker bindings/secrets only — never from source.
  *   env: DB (D1), RESEND_API_KEY, TURNSTILE_SECRET, DIGEST_SECRET,
- *        FROM_EMAIL, ADMIN_EMAIL, BASE_URL
+ *        FROM_EMAIL, ADMIN_EMAIL, BASE_URL, QQ_APP_ID, QQ_APP_SECRET
  */
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_ATTEMPTS = 5;
 const CONFIRM_TTL_MS = 24 * 3600 * 1000;
 const SIGNAL_MAX_AGE_MS = 26 * 3600 * 1000;
+const QQ_API_BASE = "https://api.bot.qq.com";
+const QQ_MAX_MESSAGE_LENGTH = 3500;
+
+let qqAccessTokenCache = { token: "", expiresAt: 0 };
+let qqSigningKeyPromise;
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -48,6 +54,153 @@ async function hmacSha256Hex(secret, text) {
   return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+function qqSecretSeed(secret) {
+  if (!secret) throw new Error("QQ_APP_SECRET is not configured");
+  let seed = "";
+  while (seed.length < 32) seed += secret;
+  return new TextEncoder().encode(seed.slice(0, 32));
+}
+
+function qqPrivateKeyDer(secret) {
+  // PKCS#8 wrapper for an Ed25519 private key whose 32-byte seed is the
+  // QQ Bot Secret repeated/truncated per the platform's signing spec.
+  const prefix = Uint8Array.from([
+    0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06,
+    0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
+  ]);
+  const seed = qqSecretSeed(secret);
+  const der = new Uint8Array(prefix.length + seed.length);
+  der.set(prefix);
+  der.set(seed, prefix.length);
+  return der;
+}
+
+async function qqSigningKey(secret) {
+  if (!qqSigningKeyPromise) {
+    qqSigningKeyPromise = crypto.subtle.importKey(
+      "pkcs8",
+      qqPrivateKeyDer(secret),
+      { name: "Ed25519" },
+      true,
+      ["sign"]
+    );
+  }
+  return qqSigningKeyPromise;
+}
+
+function hexBytes(value) {
+  if (!/^[0-9a-f]{128}$/i.test(value)) return null;
+  const bytes = new Uint8Array(64);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(value.slice(i * 2, i * 2 + 2), 16);
+  return bytes;
+}
+
+async function verifyQQSignature(secret, timestamp, signature, body) {
+  const sig = hexBytes(signature);
+  if (!sig || !timestamp) return false;
+  try {
+    const privateKey = await qqSigningKey(secret);
+    const jwk = await crypto.subtle.exportKey("jwk", privateKey);
+    const publicKey = await crypto.subtle.importKey(
+      "jwk",
+      { kty: "OKP", crv: "Ed25519", x: jwk.x, ext: true },
+      { name: "Ed25519" },
+      false,
+      ["verify"]
+    );
+    return crypto.subtle.verify(
+      "Ed25519",
+      publicKey,
+      sig,
+      new TextEncoder().encode(`${timestamp}${body}`)
+    );
+  } catch (error) {
+    console.error("QQ signature verification failed", error);
+    return false;
+  }
+}
+
+async function qqSign(secret, text) {
+  const signature = await crypto.subtle.sign(
+    "Ed25519",
+    await qqSigningKey(secret),
+    new TextEncoder().encode(text)
+  );
+  return [...new Uint8Array(signature)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function qqAccessToken(requestEnv) {
+  const now = Date.now();
+  if (qqAccessTokenCache.token && qqAccessTokenCache.expiresAt > now + 60_000) {
+    return qqAccessTokenCache.token;
+  }
+  if (!requestEnv.QQ_APP_ID || !requestEnv.QQ_APP_SECRET) {
+    throw new Error("QQ_APP_ID/QQ_APP_SECRET are not configured");
+  }
+  const response = await fetch(`${QQ_API_BASE}/app/getAppAccessToken`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ appId: requestEnv.QQ_APP_ID, clientSecret: requestEnv.QQ_APP_SECRET }),
+  });
+  const data = await response.json();
+  if (!response.ok || data.code || !data.access_token) {
+    throw new Error(`QQ access token failed: ${data.code || response.status}`);
+  }
+  const expiresIn = Number(data.expires_in) || 7200;
+  qqAccessTokenCache = {
+    token: data.access_token,
+    expiresAt: now + Math.max(60, expiresIn - 60) * 1000,
+  };
+  return qqAccessTokenCache.token;
+}
+
+async function qqApi(requestEnv, path, body) {
+  let token = await qqAccessToken(requestEnv);
+  let response = await fetch(`${QQ_API_BASE}${path}`, {
+    method: "POST",
+    headers: {
+      Authorization: `QQBot ${token}`,
+      "Content-Type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify(body),
+  });
+  if (response.status === 401) {
+    qqAccessTokenCache = { token: "", expiresAt: 0 };
+    token = await qqAccessToken(requestEnv);
+    response = await fetch(`${QQ_API_BASE}${path}`, {
+      method: "POST",
+      headers: {
+        Authorization: `QQBot ${token}`,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify(body),
+    });
+  }
+  const data = response.status === 204 ? {} : await response.json();
+  if (!response.ok || (data.err_code !== undefined && data.err_code !== 0)) {
+    throw new Error(`QQ API ${path} failed: ${data.err_code || response.status}`);
+  }
+  return data;
+}
+
+async function sendQQText(userOpenid, content, requestEnv, replyTo = "") {
+  const body = { content, msg_type: 0 };
+  if (replyTo) {
+    body.msg_id = replyTo;
+    body.msg_seq = 1;
+  }
+  return qqApi(requestEnv, `/v2/users/${encodeURIComponent(userOpenid)}/messages`, body);
+}
+
+async function sendQQGroupText(groupOpenid, content, requestEnv, replyTo = "") {
+  const body = { content, msg_type: 0 };
+  if (replyTo) {
+    body.msg_id = replyTo;
+    body.msg_seq = 1;
+  }
+  return qqApi(requestEnv, `/v2/groups/${encodeURIComponent(groupOpenid)}/messages`, body);
+}
+
 function unsubscribeToken(email) {
   return hmacSha256Hex(env.DIGEST_SECRET, `unsubscribe:${email}`);
 }
@@ -71,6 +224,198 @@ async function verifyTurnstile(token, ip) {
   });
   const data = await res.json();
   return data.success === true;
+}
+
+function qqUserOpenid(event) {
+  return String(
+    event?.author?.user_openid
+      || event?.author?.id
+      || event?.user_openid
+      || event?.openid
+      || ""
+  ).trim();
+}
+
+function qqGroupOpenid(event) {
+  return String(event?.group_openid || event?.group?.openid || "").trim();
+}
+
+function qqMessageCommand(content) {
+  return String(content || "").trim().replace(/\s+/g, "").toLowerCase();
+}
+
+async function upsertQQSubscriber(userOpenid, now) {
+  await env.DB.prepare(
+    `INSERT INTO qq_subscribers (user_openid, status, created_at, updated_at, last_message_at)
+     VALUES (?, 'active', ?, ?, ?)
+     ON CONFLICT (user_openid) DO UPDATE SET
+       status = 'active', updated_at = excluded.updated_at, last_message_at = excluded.last_message_at`
+  )
+    .bind(userOpenid, now, now, now)
+    .run();
+}
+
+async function upsertQQGroup(groupOpenid, now) {
+  await env.DB.prepare(
+    `INSERT INTO qq_groups (group_openid, status, created_at, updated_at, last_message_at)
+     VALUES (?, 'active', ?, ?, ?)
+     ON CONFLICT (group_openid) DO UPDATE SET
+       status = 'active', updated_at = excluded.updated_at, last_message_at = excluded.last_message_at`
+  )
+    .bind(groupOpenid, now, now, now)
+    .run();
+}
+
+function qqGroupAdmin(event) {
+  return ["admin", "owner"].includes(event?.author?.member_role);
+}
+
+async function processQQGroupEvent(event, requestEnv) {
+  const groupOpenid = qqGroupOpenid(event);
+  if (!groupOpenid) return;
+  const now = new Date().toISOString();
+  const command = qqMessageCommand(event.content);
+
+  if (["取消订阅", "退订", "unsubscribe", "stop", "关闭"].includes(command)) {
+    if (!qqGroupAdmin(event)) {
+      if (event.id) {
+        await sendQQGroupText(
+          groupOpenid,
+          "只有群主或管理员可以关闭本群推送。",
+          requestEnv,
+          event.id
+        );
+      }
+      return;
+    }
+    await env.DB.prepare(
+      "INSERT INTO qq_groups (group_openid, status, created_at, updated_at, last_message_at) VALUES (?, 'unsubscribed', ?, ?, ?) "
+      + "ON CONFLICT (group_openid) DO UPDATE SET status = 'unsubscribed', updated_at = excluded.updated_at, last_message_at = excluded.last_message_at"
+    ).bind(groupOpenid, now, now, now).run();
+    if (event.id) {
+      await sendQQGroupText(groupOpenid, "本群 QQ 推送已关闭。群主或管理员发送“订阅”即可恢复。", requestEnv, event.id);
+    }
+    return;
+  }
+
+  // The first @ message is the group opt-in. This works for personal bots,
+  // whose QQ platform permissions may prevent ordinary users from adding the
+  // bot as a private friend.
+  await upsertQQGroup(groupOpenid, now);
+  if (!event.id) return;
+
+  let reply = "本群 QQ 推送已开启：有新的首次或二次突破信号时会在群里通知。\n\n群主/管理员发送“取消订阅”可停止，发送“帮助”查看命令。";
+  if (["帮助", "help", "菜单", "指令"].includes(command)) {
+    reply = "可用命令：\n@机器人 订阅：开启本群信号推送\n@机器人 取消订阅：群主/管理员停止推送\n@机器人 帮助：查看本说明";
+  } else if (["订阅", "subscribe", "start", "开启"].includes(command)) {
+    reply = "本群 QQ 推送已开启：有新的首次或二次突破信号时会在群里通知。群主/管理员发送“取消订阅”可停止。";
+  }
+  await sendQQGroupText(groupOpenid, reply, requestEnv, event.id);
+}
+
+async function processQQEvent(payload, requestEnv) {
+  const type = payload.t;
+  const event = payload.d || {};
+  const isGroupEvent = ["GROUP_AT_MESSAGE_CREATE", "GROUP_MSG_RECEIVE"].includes(type);
+  const isUserEvent = ["C2C_MESSAGE_CREATE", "C2C_MSG_RECEIVE", "C2C_MSG_REJECT", "FRIEND_DEL"].includes(type);
+  if (isGroupEvent && !qqGroupOpenid(event)) return;
+  if (isUserEvent && !qqUserOpenid(event)) return;
+  if (!isGroupEvent && !isUserEvent) return;
+
+  // Webhook delivery is at-least-once. Claim the event before mutating the
+  // subscription or replying, so a QQ retry cannot send duplicate welcomes.
+  if (payload.id) {
+    const claim = await env.DB.prepare(
+      "INSERT OR IGNORE INTO qq_events (event_id, created_at) VALUES (?, ?)"
+    ).bind(payload.id, new Date().toISOString()).run();
+    if (claim.meta?.changes !== 1) return;
+  }
+
+  if (isGroupEvent) {
+    await processQQGroupEvent(event, requestEnv);
+    return;
+  }
+
+  const userOpenid = qqUserOpenid(event);
+  const now = new Date().toISOString();
+  if (type === "C2C_MSG_REJECT" || type === "FRIEND_DEL") {
+    await env.DB.prepare(
+      "INSERT INTO qq_subscribers (user_openid, status, created_at, updated_at) VALUES (?, 'unsubscribed', ?, ?) "
+      + "ON CONFLICT (user_openid) DO UPDATE SET status = 'unsubscribed', updated_at = excluded.updated_at"
+    ).bind(userOpenid, now, now).run();
+    return;
+  }
+  if (type !== "C2C_MESSAGE_CREATE" && type !== "C2C_MSG_RECEIVE") return;
+
+  const command = qqMessageCommand(event.content);
+  if (["取消订阅", "退订", "unsubscribe", "stop", "关闭"].includes(command)) {
+    await env.DB.prepare(
+      "INSERT INTO qq_subscribers (user_openid, status, created_at, updated_at, last_message_at) VALUES (?, 'unsubscribed', ?, ?, ?) "
+      + "ON CONFLICT (user_openid) DO UPDATE SET status = 'unsubscribed', updated_at = excluded.updated_at, last_message_at = excluded.last_message_at"
+    ).bind(userOpenid, now, now, now).run();
+    if (type === "C2C_MESSAGE_CREATE" && event.id) {
+      await sendQQText(userOpenid, "QQ 推送已关闭。需要恢复时发送“订阅”即可。", requestEnv, event.id);
+    }
+    return;
+  }
+
+  // Adding the bot and sending the first private message is the opt-in. This
+  // keeps the user flow simple while still making cancellation explicit.
+  await upsertQQSubscriber(userOpenid, now);
+  if (type !== "C2C_MESSAGE_CREATE" || !event.id) return;
+
+  let reply = "QQ 推送已开启：有新的首次或二次突破信号时会私聊通知你。\n\n发送“取消订阅”可停止推送，发送“帮助”查看命令。";
+  if (["帮助", "help", "菜单", "指令"].includes(command)) {
+    reply = "可用命令：\n订阅：开启 QQ 信号推送\n取消订阅：停止 QQ 信号推送\n帮助：查看本说明";
+  } else if (["订阅", "subscribe", "start", "开启"].includes(command)) {
+    reply = "QQ 推送已开启：有新的首次或二次突破信号时会私聊通知你。发送“取消订阅”可停止推送。";
+  }
+  await sendQQText(userOpenid, reply, requestEnv, event.id);
+}
+
+async function handleQQEvent(request, requestEnv, ctx) {
+  if (request.method !== "POST") return json({ error: "method not allowed" }, 405);
+  if (!requestEnv.QQ_APP_ID || !requestEnv.QQ_APP_SECRET) {
+    return json({ error: "QQ integration is not configured" }, 503);
+  }
+  const appid = request.headers.get("X-Bot-Appid") || "";
+  if (appid !== requestEnv.QQ_APP_ID) return json({ error: "unauthorized" }, 401);
+
+  const body = await request.text();
+  if (body.length > 1_000_000) return json({ error: "payload too large" }, 413);
+  let payload;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    return json({ error: "invalid JSON body" }, 400);
+  }
+
+  // QQ validates a new webhook with op=13. The validation response is signed
+  // with the same Ed25519 key used for normal event verification.
+  if (payload.op === 13) {
+    const validation = payload.d || {};
+    if (!validation.plain_token || !validation.event_ts) {
+      return json({ error: "invalid validation payload" }, 400);
+    }
+    return json({
+      plain_token: validation.plain_token,
+      signature: await qqSign(
+        requestEnv.QQ_APP_SECRET,
+        `${validation.event_ts}${validation.plain_token}`
+      ),
+    });
+  }
+
+  const verified = await verifyQQSignature(
+    requestEnv.QQ_APP_SECRET,
+    request.headers.get("X-Signature-Timestamp") || "",
+    request.headers.get("X-Signature-Ed25519") || "",
+    body
+  );
+  if (!verified) return json({ error: "invalid signature" }, 401);
+
+  if (payload.op === 0 && ctx) ctx.waitUntil(processQQEvent(payload, requestEnv));
+  return json({ op: 12 });
 }
 
 async function sendEmail(to, subject, text, html) {
@@ -253,7 +598,11 @@ async function handleDeliver(request) {
     return json({ error: "unknown kind" }, 400);
   }
   const signals = Array.isArray(body.signals) ? body.signals : [];
-  if (!signals.length) return json({ sent: true, delivered: 0 });
+  // Email intentionally remains restricted to fresh bullish second
+  // breakouts. QQ has its own stream so dashboard-only first bullish
+  // breakouts can be delivered without changing email rules.
+  const qqInput = Array.isArray(body.qq_signals) ? body.qq_signals : signals;
+  if (!signals.length && !qqInput.length) return json({ sent: true, delivered: 0 });
   // Defense in depth: the CLI applies this gate too, but the public delivery
   // boundary must not trust a malformed or replayed authenticated payload.
   const now = Date.now();
@@ -270,41 +619,69 @@ async function handleDeliver(request) {
       && signalTime <= now
       && now - signalTime <= SIGNAL_MAX_AGE_MS;
   });
-  if (!swingSignals.length) return json({ sent: true, delivered: 0, note: "internal only" });
-
-  const { results: subscribers } = await env.DB.prepare(
-    "SELECT email FROM subscribers WHERE status = 'active'"
-  ).all();
-  let delivered = 0;
-  for (const subscriber of subscribers) {
-    // Claim keys before calling Resend. This closes the race where concurrent
-    // delivery requests both observe an empty deliveries row and send twice.
-    const claims = swingSignals.map((s) =>
-      env.DB.prepare(
-        "INSERT OR IGNORE INTO deliveries (email, signal_key, created_at) VALUES (?, ?, ?)"
-      ).bind(subscriber.email, s.key, new Date().toISOString())
-    );
-    const claimResults = await env.DB.batch(claims);
-    const fresh = swingSignals.filter((_, index) => claimResults[index]?.meta?.changes === 1);
-    if (!fresh.length) continue;
-
-    const subject = `Shanzhai 信号：${fresh.length} 个新 CHoCH（${fresh.filter((s) => s.direction === "bullish").length} 涨 ${fresh.filter((s) => s.direction === "bearish").length} 跌）`;
-    const unsubscribeUrl = `${env.BASE_URL}/api/unsubscribe?e=${encodeURIComponent(subscriber.email)}&t=${await unsubscribeToken(subscriber.email)}`;
-    try {
-      await sendEmail(subscriber.email, subject, digestText(fresh, unsubscribeUrl), digestHtml(fresh, unsubscribeUrl));
-    } catch (error) {
-      // Release claims only when Resend reports failure so a later scan can
-      // retry. If the Worker crashes after a successful send, the claim stays
-      // in D1 and prevents a duplicate on the next request.
-      await env.DB.batch(fresh.map((s) =>
-        env.DB.prepare("DELETE FROM deliveries WHERE email = ? AND signal_key = ?")
-          .bind(subscriber.email, s.key)
-      ));
-      throw error;
-    }
-    delivered += fresh.length;
+  const qqSignals = qqInput.filter((s) => {
+    if (!s || typeof s !== "object") return false;
+    const signalTime = Date.parse(s.signal_time);
+    return s.layer === "swing"
+      && s.direction === "bullish"
+      && ["first", "second"].includes(s.level_tag)
+      && s.key
+      && Number.isFinite(signalTime)
+      && signalTime <= now
+      && now - signalTime <= SIGNAL_MAX_AGE_MS;
+  });
+  if (!swingSignals.length && !qqSignals.length) {
+    return json({ sent: true, delivered: 0, note: "internal only" });
   }
-  return json({ sent: true, delivered });
+
+  let delivered = 0;
+  let subscribers = [];
+  if (swingSignals.length) {
+    const result = await env.DB.prepare(
+      "SELECT email FROM subscribers WHERE status = 'active'"
+    ).all();
+    subscribers = result.results || [];
+    for (const subscriber of subscribers) {
+      // Claim keys before calling Resend. This closes the race where concurrent
+      // delivery requests both observe an empty deliveries row and send twice.
+      const claims = swingSignals.map((s) =>
+        env.DB.prepare(
+          "INSERT OR IGNORE INTO deliveries (email, signal_key, created_at) VALUES (?, ?, ?)"
+        ).bind(subscriber.email, s.key, new Date().toISOString())
+      );
+      const claimResults = await env.DB.batch(claims);
+      const fresh = swingSignals.filter((_, index) => claimResults[index]?.meta?.changes === 1);
+      if (!fresh.length) continue;
+
+      const subject = `Shanzhai 信号：${fresh.length} 个新 CHoCH（${fresh.filter((s) => s.direction === "bullish").length} 涨 ${fresh.filter((s) => s.direction === "bearish").length} 跌）`;
+      const unsubscribeUrl = `${env.BASE_URL}/api/unsubscribe?e=${encodeURIComponent(subscriber.email)}&t=${await unsubscribeToken(subscriber.email)}`;
+      try {
+        await sendEmail(subscriber.email, subject, digestText(fresh, unsubscribeUrl), digestHtml(fresh, unsubscribeUrl));
+      } catch (error) {
+        // Release claims only when Resend reports failure so a later scan can
+        // retry. If the Worker crashes after a successful send, the claim stays
+        // in D1 and prevents a duplicate on the next request.
+        await env.DB.batch(fresh.map((s) =>
+          env.DB.prepare("DELETE FROM deliveries WHERE email = ? AND signal_key = ?")
+            .bind(subscriber.email, s.key)
+        ));
+        throw error;
+      }
+      delivered += fresh.length;
+    }
+  }
+  const qq = qqSignals.length
+    ? await deliverQQSignals(qqSignals)
+    : { delivered: 0, subscribers: 0, groups: 0, failures: 0 };
+  return json({
+    sent: true,
+    delivered,
+    qq_delivered: qq.delivered,
+    qq_subscribers: qq.subscribers,
+    qq_groups: qq.groups,
+    qq_failures: qq.failures,
+    ...(qq.error ? { qq_error: qq.error } : {}),
+  });
 }
 
 function beijingTime(iso) {
@@ -316,6 +693,108 @@ function beijingTime(iso) {
   } catch {
     return String(iso);
   }
+}
+
+function qqDigestText(signals) {
+  const lines = [`Shanzhai 新信号 ${signals.length} 个：`, ""];
+  for (const s of signals) {
+    const arrow = s.direction === "bullish" ? "▲" : "▼";
+    const verb = s.direction === "bullish" ? "突破" : "跌破";
+    const move = (Number(s.breakout_pct) >= 0 ? "+" : "") + Number(s.breakout_pct).toFixed(2) + "%";
+    const level = s.level_tag === "second" ? "二次突破" : "首次突破";
+    lines.push(`${arrow} ${s.symbol} ${verb} ${formatPrice(s.level)}（${level}），收 ${formatPrice(s.close)}（${move}）`);
+    lines.push(`   时间：${beijingTime(s.signal_time)}`);
+    lines.push("");
+  }
+  lines.push(`${env.BASE_URL}（查看图表）`);
+  lines.push("仅供研究参考，不构成投资建议。");
+  const text = lines.join("\n");
+  if (text.length <= QQ_MAX_MESSAGE_LENGTH) return text;
+  return `${text.slice(0, QQ_MAX_MESSAGE_LENGTH - 50)}\n……消息过长，其余信号请打开仪表盘查看。`;
+}
+
+async function deliverQQTargets(signals, targets, targetColumn, deliveryTable, send, label) {
+  let delivered = 0;
+  let failures = 0;
+  for (const target of targets) {
+    const targetOpenid = target[targetColumn];
+    if (!targetOpenid) continue;
+    const now = new Date().toISOString();
+    const claims = signals.map((signal) =>
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO ${deliveryTable} (${targetColumn}, signal_key, created_at) VALUES (?, ?, ?)`
+      ).bind(targetOpenid, signal.key, now)
+    );
+    const claimResults = await env.DB.batch(claims);
+    const fresh = signals.filter((_, index) => claimResults[index]?.meta?.changes === 1);
+    if (!fresh.length) continue;
+
+    try {
+      await send(targetOpenid, qqDigestText(fresh), env);
+      delivered += fresh.length;
+    } catch (error) {
+      failures += 1;
+      console.error(`${label} delivery failed`, error);
+      // A failed send must be retried on the next signal delivery request.
+      await env.DB.batch(fresh.map((signal) =>
+        env.DB.prepare(
+          `DELETE FROM ${deliveryTable} WHERE ${targetColumn} = ? AND signal_key = ?`
+        ).bind(targetOpenid, signal.key)
+      ));
+    }
+  }
+  return { delivered, failures };
+}
+
+async function deliverQQSignals(signals) {
+  if (!env.QQ_APP_ID || !env.QQ_APP_SECRET) {
+    return { delivered: 0, subscribers: 0, groups: 0, failures: 0, error: "QQ not configured" };
+  }
+  let subscribers = [];
+  let groups = [];
+  const lookupErrors = [];
+  try {
+    const result = await env.DB.prepare(
+      "SELECT user_openid FROM qq_subscribers WHERE status = 'active'"
+    ).all();
+    subscribers = result.results || [];
+  } catch (error) {
+    console.error("QQ subscriber lookup failed", error);
+    lookupErrors.push("subscriber lookup failed");
+  }
+  try {
+    const result = await env.DB.prepare(
+      "SELECT group_openid FROM qq_groups WHERE status = 'active'"
+    ).all();
+    groups = result.results || [];
+  } catch (error) {
+    console.error("QQ group lookup failed", error);
+    lookupErrors.push("group lookup failed");
+  }
+
+  const userDelivery = await deliverQQTargets(
+    signals,
+    subscribers,
+    "user_openid",
+    "qq_deliveries",
+    (userOpenid, content, requestEnv) => sendQQText(userOpenid, content, requestEnv),
+    "QQ user"
+  );
+  const groupDelivery = await deliverQQTargets(
+    signals,
+    groups,
+    "group_openid",
+    "qq_group_deliveries",
+    (groupOpenid, content, requestEnv) => sendQQGroupText(groupOpenid, content, requestEnv),
+    "QQ group"
+  );
+  return {
+    delivered: userDelivery.delivered + groupDelivery.delivered,
+    subscribers: subscribers.length,
+    groups: groups.length,
+    failures: userDelivery.failures + groupDelivery.failures,
+    ...(lookupErrors.length ? { error: lookupErrors.join(", ") } : {}),
+  };
 }
 
 function escHtml(value) {
@@ -397,7 +876,7 @@ function digestHtml(signals, unsubscribeUrl) {
 }
 
 export default {
-  async fetch(request, requestEnv) {
+  async fetch(request, requestEnv, ctx) {
     globalThis.env = requestEnv;
     const url = new URL(request.url);
     const path = url.pathname;
@@ -413,6 +892,9 @@ export default {
       }
       if (request.method === "POST" && path === "/api/deliver") {
         return await handleDeliver(request);
+      }
+      if (request.method === "POST" && path === "/api/qq/events") {
+        return await handleQQEvent(request, requestEnv, ctx);
       }
       return json({ error: "not found" }, 404);
     } catch (error) {

@@ -405,7 +405,7 @@ def _signal_cards(signals: list[dict]) -> str:
         )
     note = (
         "<p class='anti-repaint'>结构位在 1h 线上确认，15m 收盘突破后才触发，信号不会重绘。"
-        "同一币种首次突破只在网页端更新；第二次突破（二次突破）才推送邮件。"
+        "同一币种首次突破只推送 QQ、不推送邮件；第二次突破（二次突破）推送邮件和 QQ。"
         "BOS 顺势延续，CHoCH 走势反转。研究输出，不构成投资建议。</p>"
     )
     return "".join(cards) + note

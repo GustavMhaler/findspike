@@ -68,6 +68,33 @@ def test_second_breakout_is_delivered_immediately(tmp_path, fake_client, monkeyp
     assert len(deliveries) == 1
     assert [signal["level_tag"] for signal in deliveries[0]["signals"]] == ["second"]
     assert deliveries[0]["signals"][0]["symbol"] == "AAAUSDT"
+    # The fixture's first breakout is 50h old, so only the fresh second
+    # breakout is eligible in this run. A first breakout is covered below at
+    # the immediate-delivery seam where it is still within the 26h window.
+    assert [signal["level_tag"] for signal in deliveries[0]["qq_signals"]] == ["second"]
+
+
+def test_first_breakout_is_delivered_to_qq_but_not_email(tmp_path, monkeypatch):
+    state = tmp_path / "state"
+    now = datetime.now(UTC)
+    signal = {
+        "symbol": "AAAUSDT", "key": "AAAUSDT:first", "close": 112,
+        "level": 110, "breakout_pct": 1.8, "signal_time": (now - timedelta(hours=1)).isoformat(),
+        "tag": "BOS", "direction": "bullish", "layer": "swing", "level_tag": "first",
+        "email_ok": False, "notify": False,
+    }
+    deliveries = []
+    monkeypatch.setattr(
+        cli,
+        "_deliver",
+        lambda _state, payload: deliveries.append(payload) or {"sent": True},
+    )
+
+    summary = cli._deliver_immediate(state, [signal], now)
+
+    assert summary["attempted"] is True
+    assert deliveries[0]["signals"] == []
+    assert [item["key"] for item in deliveries[0]["qq_signals"]] == [signal["key"]]
 
 
 def test_failed_immediate_delivery_is_retried_on_next_scan(tmp_path, fake_client, monkeypatch):
@@ -85,6 +112,7 @@ def test_failed_immediate_delivery_is_retried_on_next_scan(tmp_path, fake_client
     assert cli.main(["choch", "--output", str(output), "--state", str(state)]) == 0
     status = json.loads((state / "status.json").read_text())
     assert status["pending_notifications"]
+    assert status["pending_qq_notifications"]
 
     # The scan is idempotent, but the failed signal remains in the private
     # outbox and is retried even though no new signal is found.
@@ -92,6 +120,7 @@ def test_failed_immediate_delivery_is_retried_on_next_scan(tmp_path, fake_client
     assert len(deliveries) == 2
     status = json.loads((state / "status.json").read_text())
     assert "pending_notifications" not in status
+    assert "pending_qq_notifications" not in status
 
 
 def test_expired_pending_delivery_is_recorded(tmp_path):

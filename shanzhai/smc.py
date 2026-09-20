@@ -74,7 +74,7 @@ class SmcEvent:
     candle_open: float = 0.0
     candle_volume: float = 0.0
     avg_volume: float = 0.0
-    level_tag: str = "first"  # "first" = 首次突破 (website only), "second" = 二次突破 (email)
+    level_tag: str = "first"  # "first" = 首次突破 (QQ only), "second" = 二次突破 (email + QQ)
 
     @property
     def key(self) -> str:

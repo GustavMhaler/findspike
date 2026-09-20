@@ -9,12 +9,15 @@
   fail the daily scan.
 - `shanzhai-choch.timer`: at minutes 05, 20, 35 and 50,
   evaluate newly closed 15m triggers against confirmed 1h structure and rebuild.
-  When a fresh 二次突破 signal is found, that scan immediately requests email
-  delivery; other scans stay quiet. The five-minute offset ensures the 15m
-  candle is closed before the anti-repaint scan runs.
+  When a fresh breakout is found, that scan immediately requests delivery:
+  email receives only bullish 二次突破, while QQ receives bullish 首次 and
+  二次突破 signals. Bearish signals remain dashboard-only. Other scans stay
+  quiet. The five-minute offset ensures
+  the 15m candle is closed before the anti-repaint scan runs.
   Failed requests are retained in `state/status.json` and retried next scan;
   notifications that age past the freshness window are recorded under
-  `expired_notifications` instead of being silently discarded.
+  `expired_notifications` or `expired_qq_notifications` instead of being
+  silently discarded.
 - A failed build leaves `public/` untouched. The status sidecar records the
   failure for the next successful build and administrator alerting.
 
@@ -44,8 +47,15 @@ closed 1h candle is older than 2h.
 5. Add Tunnel ingress for `shanzhai.shaojiang61.site` to Nginx and create its
    DNS route. Keep the terminal 404/444 ingress last.
 6. Create D1 database, apply `worker/schema.sql`, configure bindings and secrets,
-   then deploy the Worker route `/api/subscriptions/*`.
-7. Verify page, JSON, stale-state banner, subscribe, confirm and unsubscribe.
+   then deploy the Worker route `/api/*`. Configure `QQ_APP_ID` and
+   `QQ_APP_SECRET` as Worker secrets and set the QQ Open Platform callback to
+   `https://shanzhai.shaojiang61.site/api/qq/events`, with C2C private-message
+   and group @ message events enabled.
+7. Verify page, JSON, stale-state banner, email subscribe/confirm/unsubscribe,
+   then add the QQ robot to a permitted group. Confirm that `@机器人 订阅`
+   enables group delivery and that `@机器人 取消订阅` disables it for a
+   group admin/owner. Private subscriptions can be tested separately by
+   sending the bot a private message.
 8. Observe the next two timers and check coverage, duration and log output.
 
 ## Rollback
@@ -63,4 +73,9 @@ specific unavailable message. Do not delete D1 during rollback.
   administrator after consecutive failure.
 - Resend failure: retain and publish signal, retry `pending_notifications`
   separately on the next CHoCH scan.
+- QQ delivery failure: retain the signal in `qq_deliveries` only after a
+  successful send; failed sends release their claim and are retried with the
+  next delivery request. Group delivery uses the same rule in
+  `qq_group_deliveries`. QQ `user_openid`/`group_openid` values are AppID-scoped
+  and never expose the user's QQ number or numeric group ID.
 - Never repair by clearing state; duplicate-delivery keys depend on it.
